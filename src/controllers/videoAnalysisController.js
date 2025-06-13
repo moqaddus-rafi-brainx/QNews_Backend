@@ -185,6 +185,7 @@ async function processVideo(fileBuffer) {
  * @param {Object} res - Express response object
  */
 async function handleVideoUpload(req, res) {
+  console.log('handleVideoUpload');
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No video file uploaded' });

@@ -6,7 +6,7 @@ const { handleVideoUpload, upload } = require('./controllers/videoAnalysisContro
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 7000;
 
 // Enable CORS for all routes
 app.use(cors({
@@ -19,8 +19,8 @@ app.use(cors({
 app.use(express.json());
 
 // POST route to receive video and analyze it
-app.post('/analyze-video', upload.single('video'), handleVideoUpload);
+app.post('/api/v2/analyze-video', upload.single('video'), handleVideoUpload);
 
-app.listen(3002, () => {
-  console.log(`Server running at http://localhost:3002`);
+app.listen(port, () => {
+  console.log(`Server running at http://localhost:${port}`);
 });
