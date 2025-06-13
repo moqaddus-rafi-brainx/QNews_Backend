@@ -153,21 +153,28 @@ async function processVideo(fileBuffer) {
       });
     }
 
-   //console.log('Segments to keep:', segmentsToKeep);
+    //console.log('Segments to keep:', segmentsToKeep);
 
     // Upload video to Cloudinary
     const videoUrl = await uploadVideoToCloudinary(fileBuffer);
     //console.log('Video uploaded to Cloudinary:', videoUrl);
 
-    // Get the total duration from the last shot or use a default
-    const totalDuration = analysisResults.shots[analysisResults.shots.length - 1]?.endTime || 70;
+    let clippedVideoUrl;
+    
+    // Only proceed with video clipping if there are segments to keep
+    if (segmentsToKeep.length > 0) {
+      // Get the total duration from the last shot or use a default
+      const totalDuration = analysisResults.shots[analysisResults.shots.length - 1]?.endTime || 70;
 
-    // Call removeClipFromVideo with the segments
-    const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
-    //console.log('Render ID:', renderId);
-    const ownerId = process.env.OWNER_ID;
-    //const renderId = '5afd7f42-fb11-41e0-aff6-5f6ac3e17858';
-    const clippedVideoUrl = `https://shotstack-api-v1-output.s3-ap-southeast-2.amazonaws.com/${ownerId}/${renderId}.mp4`;
+      // Call removeClipFromVideo with the segments
+      const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
+      //console.log('Render ID:', renderId);
+      const ownerId = process.env.OWNER_ID;
+      clippedVideoUrl = `https://shotstack-api-v1-output.s3-ap-southeast-2.amazonaws.com/${ownerId}/${renderId}.mp4`;
+    } else {
+      // If no segments to keep, use the original video URL
+      clippedVideoUrl = videoUrl;
+    }
 
     return {
       ...analysisResults,
