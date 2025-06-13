@@ -196,7 +196,7 @@ async function handleVideoUpload(req, res) {
 
   } catch (error) {
     console.error('Error in video analysis endpoint:', error);
-    res.status(500).json({ error: 'Failed to analyze video' });
+    res.status(500).json({ error: 'Failed to analyze video', trace: error });
   }
 }
 
