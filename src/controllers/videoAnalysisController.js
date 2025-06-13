@@ -8,9 +8,12 @@ const uploadVideoToCloudinary = require('../services/cloudinaryUpload');
 const { removeClipFromVideo } = require('../services/videoTrimmingService');
 require('dotenv').config();
 
-// Setup Google Cloud client with key file
+// Setup Google Cloud client with environment variables
 const client = new VideoIntelligenceServiceClient({
-  keyFilename: path.join(__dirname, '../google-key.json')
+  credentials: {
+    client_email: process.env.GOOGLE_CLIENT_EMAIL,
+    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n')
+  }
 });
 
 // Configure multer for in-memory storage
@@ -25,7 +28,7 @@ async function analyzeVideo(fileBuffer) {
   try {
     // Analyze audio first
     const audioAnalysis = await extractAudioAndAnalyze(fileBuffer);
-    
+   // console.log('Audio Analysis:', audioAnalysis);
 
     const request = {
       inputContent: fileBuffer.toString('base64'),
@@ -33,7 +36,7 @@ async function analyzeVideo(fileBuffer) {
         'SPEECH_TRANSCRIPTION',
         'LABEL_DETECTION',
         'SHOT_CHANGE_DETECTION',
-        'TEXT_DETECTION'
+        //'TEXT_DETECTION'
       ],
       videoContext: {
         speechTranscriptionConfig: {
@@ -99,7 +102,7 @@ async function analyzeVideo(fileBuffer) {
 
     const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
     const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer);
-
+    //console.log('Grouped Transcripts:', groupedTranscripts);
     return {
       languageDetails: {
         confidence: annotationResults.speechTranscriptions[0]?.alternatives[0]?.confidence || 0
@@ -150,7 +153,7 @@ async function processVideo(fileBuffer) {
       });
     }
 
-   // console.log('Segments to keep:', segmentsToKeep);
+   //console.log('Segments to keep:', segmentsToKeep);
 
     // Upload video to Cloudinary
     const videoUrl = await uploadVideoToCloudinary(fileBuffer);
