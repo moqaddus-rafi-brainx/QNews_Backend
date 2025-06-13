@@ -1,37 +1,24 @@
-# QNews AI
+# QNews AI - Video Analysis Module (Backend)
 
-A Node.js-based API for QNews AI application.
+This is the backend service for the **QNews AI App**'s video analysis feature. It processes uploaded videos, extracts transcripts, determines if the video is news-related, categorizes the content, identifies relevant segments, and clips the video accordingly.
 
-## Setup
+## 🧠 Powered By
 
-1. Install dependencies:
-```bash
-npm install
-```
+- [OpenAI API](https://platform.openai.com/)
+- [Google Cloud Video Intelligence API](https://cloud.google.com/video-intelligence)
+- [Cloudinary](https://cloudinary.com/) – for video hosting
+- [Shotstack](https://shotstack.io/) – for programmatic video clipping
 
-2. Create a `.env` file in the root directory and add your environment variables:
-```
-PORT=3000
-```
+---
 
-3. Start the development server:
-```bash
-npm run dev
-```
+## 🚀 Features
 
-## Available Scripts
-
-- `npm run dev`: Start the development server with nodemon
-- `npm start`: Start the production server
-- `npm test`: Run tests (not configured yet)
-
-## Project Structure
-
-```
-├── src/
-│   └── index.js      # Main application file
-├── .env              # Environment variables
-├── .gitignore        # Git ignore file
-├── package.json      # Project dependencies and scripts
-└── README.md         # Project documentation
-```
+- Analyze video transcripts using **Google Cloud Video Intelligence**
+- Use **OpenAI** to:
+  - Detect whether video is news-related
+  - Classify news type (e.g., sports, politics)
+  - Identify key segments and irrelevant parts
+  - Generate summaries and main topic
+- Upload and store video on **Cloudinary** as shotstack requires a public url for the video.
+- Clip out irrelevant segments using **Shotstack**
+- Return a downloadable or streamable clipped video link

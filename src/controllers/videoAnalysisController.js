@@ -25,7 +25,7 @@ async function analyzeVideo(fileBuffer) {
   try {
     // Analyze audio first
     const audioAnalysis = await extractAudioAndAnalyze(fileBuffer);
-    console.log('Audio Analysis:', audioAnalysis);
+    
 
     const request = {
       inputContent: fileBuffer.toString('base64'),
@@ -126,7 +126,6 @@ async function analyzeVideo(fileBuffer) {
 async function processVideo(fileBuffer) {
   try {
     const analysisResults = await analyzeVideo(fileBuffer);
-    console.log('Analysis Results:', analysisResults);
 
     // Extract segments from relevant_content
     const segmentsToKeep = [];
