@@ -2,8 +2,6 @@
 // npm install express multer @google-cloud/video-intelligence dotenv cors
 const express = require('express');
 const cors = require('cors');
-const { File } = require('node:buffer');
-globalThis.File = File;
 const { handleVideoUpload, upload } = require('./controllers/videoAnalysisController');
 require('dotenv').config();
 
