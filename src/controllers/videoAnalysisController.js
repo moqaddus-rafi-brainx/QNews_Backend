@@ -3,9 +3,11 @@ const path = require('path');
 const multer = require('multer');
 const { LANGUAGE_NAMES } = require('../constants/languages');
 const { extractAudioAndAnalyze, getTranscriptTimestamps } = require('../services/audioAnalysisService');
-const { groupRelatedTranscripts } = require('../services/openAIService');
+const { groupRelatedTranscripts,analyzeMainTopic } = require('../services/openAIService');
+const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots} = require('../services/visualAnalysisService');
 const uploadVideoToCloudinary = require('../services/cloudinaryUpload');
 const { removeClipFromVideo } = require('../services/videoTrimmingService');
+const { annotateVideoWithGoogle } = require('../services/googleService');
 require('dotenv').config();
 
 // Setup Google Cloud client with environment variables
@@ -24,34 +26,18 @@ const upload = multer({ storage: multer.memoryStorage() });
  * @param {Buffer} fileBuffer - The video file buffer
  * @returns {Promise<Object>} Analysis results
  */
-async function analyzeVideo(fileBuffer) {
+async function analyzeVideo(fileBuffer,decription) {
   try {
     // Analyze audio first
     const audioAnalysis = await extractAudioAndAnalyze(fileBuffer);
-   // console.log('Audio Analysis:', audioAnalysis);
+    //console.log('Audio Analysis:', audioAnalysis);
 
-    const request = {
-      inputContent: fileBuffer.toString('base64'),
-      features: [
-        'SPEECH_TRANSCRIPTION',
-        'LABEL_DETECTION',
-        'SHOT_CHANGE_DETECTION',
-        //'TEXT_DETECTION'
-      ],
-      videoContext: {
-        speechTranscriptionConfig: {
-          languageCode: audioAnalysis.detectedLanguage,
-          enableAutomaticPunctuation: true
-        }
-      }
-    };
-
-    const [operation] = await client.annotateVideo(request);
-    const [operationResult] = await operation.promise();
+    // Use the new Google Service for video annotation
+    const operationResult = await annotateVideoWithGoogle(fileBuffer, audioAnalysis.detectedLanguage);
     let annotationResults;
     let segmentLabelAnnotations;
     let shotAnnotations;
-    
+    //console.log('Operation Result:',operationResult);
     // Safely check if speechTranscriptions exists and is not empty
     const hasTranscriptions0 = operationResult.annotationResults[0]?.speechTranscriptions?.length > 0;
     const hasTranscriptions1 = operationResult.annotationResults[1]?.speechTranscriptions?.length > 0;
@@ -60,17 +46,28 @@ async function analyzeVideo(fileBuffer) {
       annotationResults = operationResult.annotationResults[0];
       segmentLabelAnnotations = operationResult.annotationResults[1]?.segmentLabelAnnotations || [];
       shotAnnotations = operationResult.annotationResults[1]?.shotAnnotations || [];
+      //console.log('Shot Annotations:',shotAnnotations);
     }
     else if(hasTranscriptions1) {
       annotationResults = operationResult.annotationResults[1];
       segmentLabelAnnotations = operationResult.annotationResults[0]?.segmentLabelAnnotations || [];
       shotAnnotations = operationResult.annotationResults[0]?.shotAnnotations || [];
+      
+      //console.log('Shot Annotations:',shotAnnotations);
     }
     else {
       // Handle case where no transcriptions are found
       annotationResults = { speechTranscriptions: [] };
-      segmentLabelAnnotations = [];
-      shotAnnotations = [];
+      segmentLabelAnnotations =
+  operationResult.annotationResults[0]?.segmentLabelAnnotations?.length
+    ? operationResult.annotationResults[0].segmentLabelAnnotations
+    : operationResult.annotationResults[1]?.segmentLabelAnnotations || [];
+
+  shotAnnotations =
+  operationResult.annotationResults[0]?.shotAnnotations?.length
+    ? operationResult.annotationResults[0].shotAnnotations
+    : operationResult.annotationResults[1]?.shotAnnotations || [];
+      
     }
 
     const speechTranscripts = annotationResults.speechTranscriptions.map(t => {
@@ -95,24 +92,92 @@ async function analyzeVideo(fileBuffer) {
       }))
     }));
 
+    
+
     const shots = (shotAnnotations || []).map(shot => ({
       startTime: parseFloat(shot.startTimeOffset.seconds || 0) + parseFloat(shot.startTimeOffset.nanos) * 1e-9,
       endTime: parseFloat(shot.endTimeOffset.seconds || 0) + parseFloat(shot.endTimeOffset.nanos) * 1e-9
     }));
 
-    const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
-    const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer);
-    //console.log('Grouped Transcripts:', groupedTranscripts);
+    let mainTopicUsingLabels = null;
+    let shotAnalyses = null;
+    let shotRelevance = null;
+    let mergedShots = null;
+    let language = null;
+    let mainTopic = null;
+    let summary = null;
+    let relevantContent = null;
+    let irrelevantContent = null;
+    let isNews = null;
+    let category = null;
+    const mainTopicUsingTranscripts = await analyzeMainTopic(speechTranscripts);
+
+    //Analyze video labels using OpenAI
+        //mainTopicUsingLabels = await analyzeVideoLabels(labels);
+        // Analyze each shot using OpenAI Vision
+        //console.log('Analyzing shots:',shots);
+       // shotAnalyses = await analyzeShots(fileBuffer, shots);
+       // shotRelevance= await analyzeShotRelevance(shotAnalyses);
+
+      // Analyze video labels using OpenAI
+     //    mainTopicUsingLabels = await analyzeVideoLabels(labels);
+        //  // Analyze each shot using OpenAI Vision
+        //  shotAnalyses = await analyzeShots(fileBuffer, shots);
+        //  shotRelevance= await analyzeShotRelevance(shotAnalyses);
+        //  mergedShots=separateAndMergeRelevantShots(shotRelevance);
+
+     if (!mainTopicUsingTranscripts.is_news || mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic")
+     {
+       // Analyze video labels using OpenAI
+         mainTopicUsingLabels = await analyzeVideoLabels(labels);
+         // Analyze each shot using OpenAI Vision
+         shotAnalyses = await analyzeShots(fileBuffer, shots);
+         shotRelevance= await analyzeShotRelevance(shotAnalyses,decription);
+         language=shotRelevance.detectedLanguage;
+         mainTopic=shotRelevance.mainTopic;
+         summary=shotRelevance.summary;
+         isNews=shotRelevance.isNewsVideo;
+         category=shotRelevance.newsCategory;
+        //  console.log('Category:',category);
+        //  console.log('Is News:',isNews);
+        //  console.log('Shot Relevance:',shotRelevance);
+         
+         mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
+         relevantContent=mergedShots.relevantShots;
+         irrelevantContent=mergedShots.irrelevantShots;
+     }
+     else
+     {
+      const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
+      const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer, shots,mainTopicUsingTranscripts);
+      //console.log('Grouped Transcripts:', groupedTranscripts);
+      mainTopic=groupedTranscripts.main_topic;
+      summary=groupedTranscripts.summary;
+      isNews=groupedTranscripts.is_news;
+      category=groupedTranscripts.category;
+      language=LANGUAGE_NAMES[(speechTranscripts[0]?.languageCode || '').toLowerCase()] || 'Unknown';
+      relevantContent=groupedTranscripts.relevant_content.mergedContent;
+      irrelevantContent=groupedTranscripts.irrelevant_content;
+
+      
+     }
+     isNews=true;
+    
+
+   
+
+    
     return {
-      languageDetails: {
-        confidence: annotationResults.speechTranscriptions[0]?.alternatives[0]?.confidence || 0
-      },
-      Language: LANGUAGE_NAMES[(speechTranscripts[0]?.languageCode || '').toLowerCase()] || 'Unknown',
-      LanguageCode: speechTranscripts[0]?.languageCode,
-      labels,
+      
+      language,
+      mainTopic,
+      summary,
+      isNews,
+      category,
+      relevantContent,
+      irrelevantContent,
       shots,
-      groupedTranscripts,
-      operationResult
+    operationResult
     };
 
   } catch (error) {
@@ -126,16 +191,16 @@ async function analyzeVideo(fileBuffer) {
  * @param {Buffer} fileBuffer - The video file buffer
  * @returns {Promise<Object>} Analysis results with clipped video URL
  */
-async function processVideo(fileBuffer) {
+async function processVideo(fileBuffer,decription) {
   try {
-    const analysisResults = await analyzeVideo(fileBuffer);
+    const analysisResults = await analyzeVideo(fileBuffer,decription);
 
     // Extract segments from relevant_content
     const segmentsToKeep = [];
 
-    // Add merged segments
-    if (analysisResults.groupedTranscripts.relevant_content.merged_segments) {
-      analysisResults.groupedTranscripts.relevant_content.merged_segments.forEach(segment => {
+   // Add merged segments
+    if (analysisResults.relevantContent) {
+      analysisResults.relevantContent.forEach(segment => {
         segmentsToKeep.push({
           startTime: segment.startTime,
           endTime: segment.endTime
@@ -143,28 +208,19 @@ async function processVideo(fileBuffer) {
       });
     }
 
-    // Add unmerged segments
-    if (analysisResults.groupedTranscripts.relevant_content.unmerged_segments) {
-      analysisResults.groupedTranscripts.relevant_content.unmerged_segments.forEach(segment => {
-        segmentsToKeep.push({
-          startTime: segment.startTime,
-          endTime: segment.endTime
-        });
-      });
-    }
+    console.log('Segments to keep:', segmentsToKeep);
 
-    //console.log('Segments to keep:', segmentsToKeep);
-
-    // Upload video to Cloudinary
-    const videoUrl = await uploadVideoToCloudinary(fileBuffer);
-    //console.log('Video uploaded to Cloudinary:', videoUrl);
 
     let clippedVideoUrl;
     
-    // Only proceed with video clipping if there are segments to keep
+    //Only proceed with video clipping if there are segments to keep
     if (segmentsToKeep.length > 0) {
       // Get the total duration from the last shot or use a default
       const totalDuration = analysisResults.shots[analysisResults.shots.length - 1]?.endTime || 70;
+
+      // Upload video to Cloudinary
+    const videoUrl = await uploadVideoToCloudinary(fileBuffer);
+    //console.log('Video uploaded to Cloudinary:', videoUrl);
 
       // Call removeClipFromVideo with the segments
       const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
@@ -173,7 +229,7 @@ async function processVideo(fileBuffer) {
       clippedVideoUrl = `https://shotstack-api-v1-output.s3-ap-southeast-2.amazonaws.com/${ownerId}/${renderId}.mp4`;
     } else {
       // If no segments to keep, use the original video URL
-      clippedVideoUrl = videoUrl;
+      clippedVideoUrl = "";
     }
 
     return {
@@ -198,7 +254,9 @@ async function handleVideoUpload(req, res) {
       return res.status(400).json({ error: 'No video file uploaded' });
     }
 
-    const results = await processVideo(req.file.buffer);
+   // const decription=`Ahmedabad, Jun 12 (EFE).- A passenger plane operated by Air India, carrying an estimated 200 people, crashed Thursday near the airport in Ahmedabad, a city in the western Indian state of Gujarat.\n\n \"Flight AI171, operating Ahmedabad–London Gatwick, was involved in an incident today, 12 June 2025. At this moment, we are ascertaining the details and will share further updates at the earliest\", Air India said in a statement. `
+    const decription="";
+    const results = await processVideo(req.file.buffer,decription);
     res.json(results);
 
   } catch (error) {

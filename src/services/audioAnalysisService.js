@@ -37,11 +37,11 @@ async function extractAudioAndAnalyze(videoBuffer) {
             file: fs.createReadStream(tempAudioPath),
             model: "whisper-1"
           });
-         // console.log('Transcription complete. Analyzing transcript...');
+          //console.log('Transcription complete. Analyzing transcript...');
           
           // Analyze the transcript to determine news category and language
           const analysis = await analyzeTranscript(transcript.text);
-         // console.log('Analysis complete:', analysis);
+          //console.log('Analysis complete:', analysis);
 
           // Clean up temp files
           fs.unlinkSync(tempVideoPath);
@@ -75,7 +75,7 @@ async function extractAudioAndAnalyze(videoBuffer) {
 async function analyzeTranscript(transcript) {
   //console.log('Analyzing transcript for language and news category...');
   const response = await openai.chat.completions.create({
-    model: 'gpt-4.1-nano',
+    model: 'gpt-3.5-turbo',  
     messages: [
       {
         role: 'system',

@@ -82,6 +82,8 @@ async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameR
  * @param {Object} data - Includes transcript, labels, shots
  * @returns {Promise<Object>} Analysis result
  */
+
+//Not using this one.
 async function analyzeWithOpenAI(data) {
   const { speechTranscripts, labels, shots } = data;
 
@@ -148,6 +150,7 @@ Return result as JSON with this format:
  * Analyzes individual transcripts to determine if they are news-related and their category
  * @param {Array} transcripts - Array of transcript objects with timestamps
  * @returns {Promise<Array>} Array of analysis results for each transcript
+ * Not using this one.
  */
 async function analyzeTranscriptsIndividually(transcripts) {
   const results = [];
@@ -214,11 +217,15 @@ async function analyzeMainTopic(transcripts) {
   const prompt = `
 You are an expert content analyzer.
 
+Your task is to analyze the transcript and provide insights about the video content. However, please keep in mind:
+- The transcript may be very short, incomplete, or contain minimal/no useful information.
+- If the transcript does not provide enough meaningful content to determine the topic, category, or news value, state that clearly in your response as "Transcript is too short to determine the main topic".
+
 Here is the complete transcript of a video:
 "${combinedTranscript}"
 
 Analyze this content and provide:
-1. The main topic or subject being discussed
+1. The main topic or subject being discussed( if detectable )
 2. Whether this is news content
 3. If it is news, what general news category it belongs to for example: politics/human rights/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)
 4. Is it AI generated or not?
@@ -234,7 +241,7 @@ Return result as JSON with this format:
 `;
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4",
+    model: "gpt-3.5-turbo",
     messages: [{ role: "user", content: prompt }],
     temperature: 0.4
   });
@@ -296,7 +303,7 @@ Return result as JSON with this format:
 `;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4o",
       messages: [
         {
           role: "user",
@@ -377,12 +384,12 @@ function mergeCloseTranscripts(transcripts) {
  * @param {Buffer} videoBuffer - Video file buffer
  * @returns {Promise<Object>} Object containing relevant and irrelevant groups
  */
-async function groupRelatedTranscripts(transcripts, videoBuffer) {
+async function groupRelatedTranscripts(transcripts, videoBuffer,shots,mainTopic) {
   const relevantGroup = [];
   const irrelevantGroup = [];
 
   // First, analyze the entire content to understand the main topic and news category
-  const mainTopicAnalysis = await analyzeMainTopic(transcripts);
+  const mainTopicAnalysis = mainTopic;
   
   for (const transcript of transcripts) {
     const prompt = `
@@ -409,7 +416,7 @@ Return result as JSON with this format:
 `;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4.1-nano",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.4
     });
@@ -472,6 +479,7 @@ Return result as JSON with this format:
 
   // Merge close transcripts in relevant group
   const mergedGroups = mergeCloseTranscripts(relevantGroup);
+ // const adjustedTranscripts = adjustTranscriptTimestampsWithShots(relevantGroup, shots);
   
   // Create merged and unmerged content sections
   const mergedContent = mergedGroups.map(group => ({
@@ -494,9 +502,10 @@ Return result as JSON with this format:
     is_news: mainTopicAnalysis.is_news,
     category: mainTopicAnalysis.category,
     is_ai_generated: mainTopicAnalysis.is_ai_generated,
+    //adjusted_transcripts: adjustedTranscripts,
     relevant_content: {
-      merged_segments: mergedContent,
-      unmerged_segments: unmergedContent
+       mergedContent,
+      //unmerged_segments: unmergedContent
     },
     irrelevant_content: {
       transcripts: irrelevantGroup,
@@ -506,8 +515,43 @@ Return result as JSON with this format:
   };
 }
 
+/**
+ * Adjusts transcript timestamps to align with shot boundaries
+ * @param {Array} transcripts - Array of transcript objects with startTime and endTime
+ * @param {Array} shots - Array of shot objects with startTime and endTime
+ * @returns {Array} Array of transcripts with adjusted timestamps
+ */
+function adjustTranscriptTimestampsWithShots(transcripts, shots) {
+  return transcripts.map(transcript => {
+    const transcriptStart = parseFloat(transcript.startTime);
+    const transcriptEnd = parseFloat(transcript.endTime);
+    
+    // Find the shot that contains the transcript start time
+    const startShot = shots.find(shot => 
+      parseFloat(shot.startTime) <= transcriptStart && 
+      parseFloat(shot.endTime) >= transcriptStart
+    );
+    
+    // Find the shot that contains the transcript end time
+    const endShot = shots.find(shot => 
+      parseFloat(shot.startTime) <= transcriptEnd && 
+      parseFloat(shot.endTime) >= transcriptEnd
+    );
+    
+    // Create a new transcript object with adjusted timestamps
+    return {
+      ...transcript,
+      startTime: startShot ? startShot.startTime.toString() : transcript.startTime,
+      endTime: endShot ? endShot.endTime.toString() : transcript.endTime
+    };
+  });
+}
+
 module.exports = {
+  analyzeMainTopic,
   analyzeWithOpenAI,
   analyzeTranscriptsIndividually,
-  groupRelatedTranscripts
+  groupRelatedTranscripts,
+  adjustTranscriptTimestampsWithShots,
+  mergeCloseTranscripts
 };
