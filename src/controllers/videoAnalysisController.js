@@ -192,6 +192,7 @@ async function processVideo(fileBuffer) {
  * @param {Object} res - Express response object
  */
 async function handleVideoUpload(req, res) {
+  console.log('handleVideoUpload');
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No video file uploaded' });
@@ -202,7 +203,7 @@ async function handleVideoUpload(req, res) {
 
   } catch (error) {
     console.error('Error in video analysis endpoint:', error);
-    res.status(500).json({ error: 'Failed to analyze video' });
+    res.status(500).json({ error: 'Failed to analyze video', trace: error?.message });
   }
 }
 
