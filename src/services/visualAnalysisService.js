@@ -246,7 +246,7 @@ async function analyzeShot(frames) {
             ]
           }
         ],
-        max_tokens: 150
+        max_tokens: 100
       });
       return completion.choices[0].message.content.trim();
     }));
@@ -268,7 +268,7 @@ ${frameDescriptions.join('\n\n')}
 Please provide a single, coherent description that captures the main content and any changes or movements shown across these frames.`
         }
       ],
-      max_tokens: 200
+      max_tokens: 150
     });
 
     return combinedCompletion.choices[0].message.content.trim();
@@ -600,6 +600,8 @@ function selectMostRelevantShotsWithin30sGreedy(shots) {
 
   return { selectedShots, totalDuration };
 }
+
+
 
 module.exports = {
   analyzeVideoLabels,

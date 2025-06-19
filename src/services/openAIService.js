@@ -222,16 +222,20 @@ You are an expert content analyzer.
 Your task is to analyze the transcript and provide insights about the video content. However, please keep in mind:
 - The transcript may be very short(like few random words), incomplete, or contain minimal/no useful information.
 - If the transcript does not provide enough meaningful content to determine the topic, category, or news value, state that clearly in your response as "Transcript is too short to determine the main topic".
+- IMPORTANT: The "is_sufficient" field should be determined ONLY by the transcript content, NOT by the description. A transcript is considered sufficient if it contains meaningful, coherent content that can be analyzed for topic, category, and news value.
 
 Here is the complete transcript of a video:
 "${combinedTranscript}"
 
+${description ? `Here is the description about the video:
+"${description}"` : ""}
 
 Analyze this content and provide:
 1. The main topic or subject being discussed( if detectable )
 2. Whether this can be a news content.
 3. If it is news, what general news category it belongs to for example: politics/human rights/technology/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)
 4. Is it AI generated or not?
+5. Is the transcript sufficient for analysis? (true if transcript contains meaningful, coherent content; false if transcript is too short, incomplete, or lacks useful information)
 
 Return result as JSON with this format:
 {
@@ -239,7 +243,8 @@ Return result as JSON with this format:
   "summary": "2-3 sentence summary of the content",
   "is_news": true/false,
   "category": "politics/human rights/sports/entertainment/social/technology/natural disaster/economy/environment/war/crime/celebration/(etc...)",
-  "is_ai_generated": true/false
+  "is_ai_generated": true/false,
+  "is_sufficient": true/false
   }
 `;
 
@@ -260,7 +265,8 @@ Return result as JSON with this format:
       main_topic: "Unknown topic",
       summary: "Failed to analyze main topic",
       is_news: false,
-      category: "other"
+      category: "other",
+      is_sufficient: false
     };
   }
 }
@@ -306,7 +312,7 @@ Return result as JSON with this format:
 `;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-3.5-turbo",
       messages: [
         {
           role: "user",
@@ -442,7 +448,7 @@ Return result as JSON with this format:
           );
           
           // Analyze voice type with frames
-          const voiceAnalysis = await analyzeVoiceTypeWithFrames(transcript, frames);
+          //const voiceAnalysis = await analyzeVoiceTypeWithFrames(transcript, frames);
           //console.log("voiceAnalysis:", voiceAnalysis);
           
           relevantGroup.push({
@@ -450,7 +456,7 @@ Return result as JSON with this format:
             relevance_type: result.relevance_type,
             relevanceScore: result.relevanceScore,
             relevance_explanation: result.explanation,
-            visual_analysis: voiceAnalysis
+            //visual_analysis: voiceAnalysis
           });
         } catch (error) {
           console.error(`Error processing frames for transcript at ${transcript.startTime}-${transcript.endTime}:`, error);

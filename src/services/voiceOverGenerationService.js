@@ -2,6 +2,7 @@ const { OpenAI } = require('openai');
 require('dotenv').config();
 const axios = require('axios');
 const fs = require('fs');
+const { uploadAudioToCloudinary } = require('./cloudinaryUpload');
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const openai = new OpenAI({
@@ -19,7 +20,7 @@ async function generateVoiceOver(summary, shots, duration) {
     
     const visualDescription=shots.map(shot => shot.description).join('\n');
 
-  const prompt = `You are a professional text generator for voiceovers on videos. Write a compelling, natural-sounding voiceover script for a video.\n\nVideo Summary: ${summary}\nVisual Description: ${visualDescription}.Focus mainly on the summary and donot include scene descriptions.\n\nThe voiceover should match the visuals and be engaging for viewers. The total voiceover should be suitable for a video of about ${duration} seconds.\n\nRespond ONLY with the script, do not include any other text or explanation.`;
+  const prompt = `You are a professional summary text generator for voiceovers on videos. Write a compelling, natural-sounding voiceover script summarizing the video content.\n\nVideo Summary: ${summary}\nVisual Description: ${visualDescription}.Focus mainly on the summary and donot include scene descriptions.\n\nThe voiceover should match the visuals and be engaging for viewers. The total voiceover should be suitable for a video of about ${duration} seconds.\n\nRespond ONLY with the script, do not include any other text or explanation.`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4",
@@ -27,7 +28,7 @@ async function generateVoiceOver(summary, shots, duration) {
       { role: "system", content: "You are a helpful assistant for video voiceover generation." },
       { role: "user", content: prompt }
     ],
-    max_tokens: 400,
+    max_tokens: 300,
     temperature: 0.7
   });
   console.log('Voice Over:',completion.choices[0].message.content.trim());
@@ -52,8 +53,10 @@ async function convertTextToSpeech(text, voice) {
         }
       );
   
-      fs.writeFileSync('output.mp3', response.data);
-      console.log('✅ Audio saved as output.mp3');
+      // Upload audio buffer to Cloudinary instead of saving locally
+      const audioUrl = await uploadAudioToCloudinary(response.data, 'voiceovers');
+      console.log('✅ Audio uploaded to Cloudinary:', audioUrl);
+      return audioUrl;
     } catch (error) {
       if (error.response?.data) {
         const errorText = Buffer.from(error.response.data).toString('utf-8');
@@ -66,6 +69,7 @@ async function convertTextToSpeech(text, voice) {
       } else {
         console.error('❌ Error:', error.message);
       }
+      throw error; // Re-throw the error so calling function can handle it
     }
   }
 

@@ -5,7 +5,7 @@ const { LANGUAGE_NAMES } = require('../constants/languages');
 const { extractAudioAndAnalyze, getTranscriptTimestamps } = require('../services/audioAnalysisService');
 const { groupRelatedTranscripts,analyzeMainTopic } = require('../services/openAIService');
 const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots,selectMostRelevantShotsWithin30s,selectMostRelevantShotsWithin30sGreedy} = require('../services/visualAnalysisService');
-const uploadVideoToCloudinary = require('../services/cloudinaryUpload');
+const { uploadVideoToCloudinary } = require('../services/cloudinaryUpload');
 const { removeClipFromVideo } = require('../services/videoTrimmingService');
 const { annotateVideoWithGoogle } = require('../services/googleService');
 const { generateVoiceOver, convertTextToSpeech } = require('../services/voiceOverGenerationService');
@@ -132,7 +132,7 @@ async function analyzeVideo(fileBuffer,description) {
         //  shotRelevance= await analyzeShotRelevance(shotAnalyses);
         //  mergedShots=separateAndMergeRelevantShots(shotRelevance);
 
-     if (mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic")
+     if (mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic" || mainTopicUsingTranscripts.is_sufficient === false)
      {
         console.log("mainTopicUsingTranscripts.is_news",mainTopicUsingTranscripts);
        // Analyze video labels using OpenAI
@@ -141,7 +141,7 @@ async function analyzeVideo(fileBuffer,description) {
          shotAnalyses = await analyzeShots(fileBuffer, shots);
          shotRelevance= await analyzeShotRelevance(shotAnalyses,description);
         const {selectedShots,totalDuration}= await selectMostRelevantShotsWithin30sGreedy(shotRelevance.shots);
-         console.log('Most Relevant Shots:',selectedShots);
+        // console.log('Most Relevant Shots:',selectedShots);
          language=shotRelevance.detectedLanguage;
          mainTopic=shotRelevance.mainTopic;
          summary=shotRelevance.summary;
@@ -151,16 +151,17 @@ async function analyzeVideo(fileBuffer,description) {
         //  console.log('Is News:',isNews);
         //  console.log('Shot Relevance:',shotRelevance);
          
+        // mergedShots=separateAndMergeRelevantShots(selectedShots,shotRelevance.shots);
          mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
-         //mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
          relevantContent=mergedShots.relevantShots;
-        // const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
-        // console.log('Voice Over:',voiceOver);
-        // convertTextToSpeech(voiceOver,language);
+        //  const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
+        //  console.log('Voice Over:',voiceOver);
+        //  convertTextToSpeech(voiceOver,language);
          irrelevantContent=mergedShots.irrelevantShots;
      }
      else
      {
+      console.log("mainTopicUsingTranscripts.is_news",mainTopicUsingTranscripts);
       const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
       const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer, shots,mainTopicUsingTranscripts);
       console.log('Grouped Transcripts:', groupedTranscripts);

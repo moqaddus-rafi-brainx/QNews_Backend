@@ -1,12 +1,12 @@
 // Install dependencies before running:
 // npm install express multer @google-cloud/video-intelligence dotenv cors
+const { File } = require('node:buffer');
+global.File = File;
 const express = require('express');
 const cors = require('cors');
 const { handleVideoUpload, upload } = require('./controllers/videoAnalysisController');
 require('dotenv').config();
 
-const { File } = require('node:buffer');
-global.File = File;
 
 const app = express();
 const port = process.env.PORT || 7000;

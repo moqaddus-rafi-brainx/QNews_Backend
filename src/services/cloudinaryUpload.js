@@ -22,4 +22,29 @@ function uploadVideoToCloudinary(buffer, folder = 'my_videos') {
   });
 }
 
-module.exports = uploadVideoToCloudinary;
+/**
+ * Uploads an audio buffer to Cloudinary and returns the public URL
+ * @param {Buffer} buffer - The audio file buffer
+ * @param {string} folder - Optional folder name in Cloudinary
+ * @returns {Promise<string>} - The uploaded audio URL
+ */
+function uploadAudioToCloudinary(buffer, folder = 'my_audio') {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_stream(
+      {
+        resource_type: 'video', // Cloudinary uses 'video' for audio files
+        folder,
+        format: 'mp3', // Specify the audio format
+      },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result.secure_url);
+      }
+    ).end(buffer);
+  });
+}
+
+module.exports = {
+  uploadVideoToCloudinary,
+  uploadAudioToCloudinary
+};
