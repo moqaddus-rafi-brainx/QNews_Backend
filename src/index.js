@@ -18,6 +18,18 @@ app.use(cors({
 // Parse JSON bodies
 app.use(express.json());
 
+// Default GET route for health check
+app.get('/', (req, res) => {
+  res.json({
+    message: 'QNews Video Analysis API is running',
+    status: 'healthy',
+    // version: '2.0',
+    // endpoints: {
+    //   analyze: 'POST /api/v2/analyze-video'
+    // }
+  });
+});
+
 // POST route to receive video and analyze it
 app.post('/api/v2/analyze-video', upload.single('video'), handleVideoUpload);
 
