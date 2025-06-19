@@ -433,6 +433,7 @@ function separateAndMergeRelevantShots(allShots) {
 
   // Separate relevant and irrelevant shots
   const relevantShots = allShots.filter(shot => shot.isRelevant);
+  //const relevantShots = selectShots;
   const irrelevantShots = allShots.filter(shot => !shot.isRelevant);
 
   // Convert relevant shots to transcript-like format for merging
@@ -446,7 +447,7 @@ function separateAndMergeRelevantShots(allShots) {
 
   // Merge close shots
   //console.log('Select Shots:',selectShots);
-  const mergedGroups = mergeCloseTranscripts(shotsForMerging);
+    const mergedGroups = mergeCloseTranscripts(shotsForMerging);
 
   // Convert merged groups back to shot format
   const mergedRelevantShots = mergedGroups.map(group => {

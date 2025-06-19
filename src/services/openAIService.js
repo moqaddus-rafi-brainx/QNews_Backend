@@ -219,15 +219,13 @@ async function analyzeMainTopic(transcripts,description) {
   const prompt = `
 You are an expert content analyzer.
 
-Your task is to analyze the transcript ${description ? `and summary of the video:` : ""} and provide insights about the video content. However, please keep in mind:
+Your task is to analyze the transcript and provide insights about the video content. However, please keep in mind:
 - The transcript may be very short(like few random words), incomplete, or contain minimal/no useful information.
 - If the transcript does not provide enough meaningful content to determine the topic, category, or news value, state that clearly in your response as "Transcript is too short to determine the main topic".
 
 Here is the complete transcript of a video:
 "${combinedTranscript}"
 
-${description ? `Here is the summary of the video:
-"${description}"` : ""}
 
 Analyze this content and provide:
 1. The main topic or subject being discussed( if detectable )

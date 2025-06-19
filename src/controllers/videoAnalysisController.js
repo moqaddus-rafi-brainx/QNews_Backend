@@ -32,7 +32,7 @@ const upload = multer({
  * @param {Buffer} fileBuffer - The video file buffer
  * @returns {Promise<Object>} Analysis results
  */
-async function analyzeVideo(fileBuffer,decription) {
+async function analyzeVideo(fileBuffer,description) {
   try {
     // Analyze audio first
     const audioAnalysis = await extractAudioAndAnalyze(fileBuffer);
@@ -116,7 +116,7 @@ async function analyzeVideo(fileBuffer,decription) {
     let irrelevantContent = null;
     let isNews = null;
     let category = null;
-    const mainTopicUsingTranscripts = await analyzeMainTopic(speechTranscripts);
+    const mainTopicUsingTranscripts = await analyzeMainTopic(speechTranscripts,description);
 
     //Analyze video labels using OpenAI
         //mainTopicUsingLabels = await analyzeVideoLabels(labels);
@@ -132,16 +132,16 @@ async function analyzeVideo(fileBuffer,decription) {
         //  shotRelevance= await analyzeShotRelevance(shotAnalyses);
         //  mergedShots=separateAndMergeRelevantShots(shotRelevance);
 
-     if (!mainTopicUsingTranscripts.is_news || mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic")
+     if (mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic")
      {
         console.log("mainTopicUsingTranscripts.is_news",mainTopicUsingTranscripts);
        // Analyze video labels using OpenAI
          mainTopicUsingLabels = await analyzeVideoLabels(labels);
          // Analyze each shot using OpenAI Vision
          shotAnalyses = await analyzeShots(fileBuffer, shots);
-         shotRelevance= await analyzeShotRelevance(shotAnalyses,decription);
-          //const {selectedShots,totalDuration}= await selectMostRelevantShotsWithin30sGreedy(shotRelevance.shots);
-         // console.log('Most Relevant Shots:',selectedShots);
+         shotRelevance= await analyzeShotRelevance(shotAnalyses,description);
+        const {selectedShots,totalDuration}= await selectMostRelevantShotsWithin30sGreedy(shotRelevance.shots);
+         console.log('Most Relevant Shots:',selectedShots);
          language=shotRelevance.detectedLanguage;
          mainTopic=shotRelevance.mainTopic;
          summary=shotRelevance.summary;
@@ -154,8 +154,9 @@ async function analyzeVideo(fileBuffer,decription) {
          //mergedShots=separateAndMergeRelevantShots(selectedShots,shotRelevance.shots);
          mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
          relevantContent=mergedShots.relevantShots;
-         //const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
-         //console.log('Voice Over:',voiceOver);
+        // const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
+        // console.log('Voice Over:',voiceOver);
+         //convertTextToSpeech(voiceOver,language);
          irrelevantContent=mergedShots.irrelevantShots;
      }
      else
@@ -207,9 +208,9 @@ async function analyzeVideo(fileBuffer,decription) {
  * @param {Buffer} fileBuffer - The video file buffer
  * @returns {Promise<Object>} Analysis results with clipped video URL
  */
-async function processVideo(fileBuffer,decription) {
+async function processVideo(fileBuffer,description) {
   try {
-    const analysisResults = await analyzeVideo(fileBuffer,decription);
+    const analysisResults = await analyzeVideo(fileBuffer,description);
 
     // Extract segments from relevant_content
     const segmentsToKeep = [];
@@ -270,7 +271,7 @@ async function handleVideoUpload(req, res) {
       return res.status(400).json({ error: 'No video file uploaded' });
     }
 
-    const description = req.body.summary || "";
+    const description = req.body.summary || null;
     const results = await processVideo(req.file.buffer, description);
 
     console.log('Description:', description);
