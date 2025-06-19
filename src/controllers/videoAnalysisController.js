@@ -151,12 +151,12 @@ async function analyzeVideo(fileBuffer,description) {
         //  console.log('Is News:',isNews);
         //  console.log('Shot Relevance:',shotRelevance);
          
-         //mergedShots=separateAndMergeRelevantShots(selectedShots,shotRelevance.shots);
          mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
+         //mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
          relevantContent=mergedShots.relevantShots;
         // const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
         // console.log('Voice Over:',voiceOver);
-         //convertTextToSpeech(voiceOver,language);
+        // convertTextToSpeech(voiceOver,language);
          irrelevantContent=mergedShots.irrelevantShots;
      }
      else

@@ -41,7 +41,7 @@ async function convertTextToSpeech(text, voice) {
         {
           model: "tts-1", // or "tts-1-hd"
           input: text,
-          voice: voice
+          voice: "alloy"
         },
         {
           headers: {
