@@ -48,7 +48,9 @@ async function removeClipFromVideo(videoSrc, segmentsToKeep, totalDuration) {
     }
 
     if (segment.endTime > totalDuration) {
-      throw new Error(`Invalid segment at index ${i}: endTime cannot be greater than total duration`);
+      //throw new Error(`Invalid segment at index ${i}: endTime cannot be greater than total duration`);
+      segment.endTime=totalDuration;
+      console.log('Adjusted segment at index',i,': endTime cannot be greater than total duration');
     }
 
     // Check for overlapping segments

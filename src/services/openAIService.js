@@ -6,6 +6,8 @@ const path = require('path');
 const { Readable } = require('stream');
 require('dotenv').config();
 
+const {selectMostRelevantShotsWithin30sGreedy} = require('./visualAnalysisService');
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -211,23 +213,26 @@ Return result as JSON with this format:
  * @param {Array} transcripts - Array of transcript objects
  * @returns {Promise<Object>} Main topic and news analysis
  */
-async function analyzeMainTopic(transcripts) {
+async function analyzeMainTopic(transcripts,description) {
   const combinedTranscript = transcripts.map(t => t.transcript).join(' ');
   
   const prompt = `
 You are an expert content analyzer.
 
-Your task is to analyze the transcript and provide insights about the video content. However, please keep in mind:
-- The transcript may be very short, incomplete, or contain minimal/no useful information.
+Your task is to analyze the transcript ${description ? `and summary of the video:` : ""} and provide insights about the video content. However, please keep in mind:
+- The transcript may be very short(like few random words), incomplete, or contain minimal/no useful information.
 - If the transcript does not provide enough meaningful content to determine the topic, category, or news value, state that clearly in your response as "Transcript is too short to determine the main topic".
 
 Here is the complete transcript of a video:
 "${combinedTranscript}"
 
+${description ? `Here is the summary of the video:
+"${description}"` : ""}
+
 Analyze this content and provide:
 1. The main topic or subject being discussed( if detectable )
-2. Whether this is news content
-3. If it is news, what general news category it belongs to for example: politics/human rights/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)
+2. Whether this can be a news content.
+3. If it is news, what general news category it belongs to for example: politics/human rights/technology/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)
 4. Is it AI generated or not?
 
 Return result as JSON with this format:
@@ -235,7 +240,7 @@ Return result as JSON with this format:
   "main_topic": "Brief description of the main topic",
   "summary": "2-3 sentence summary of the content",
   "is_news": true/false,
-  "category": "politics/human rights/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)",
+  "category": "politics/human rights/sports/entertainment/social/technology/natural disaster/economy/environment/war/crime/celebration/(etc...)",
   "is_ai_generated": true/false
   }
 `;
@@ -360,7 +365,7 @@ function mergeCloseTranscripts(transcripts) {
     // Check if current transcript is within 8 seconds of the last transcript in the group
     const timeGap = parseFloat(current.startTime) - parseFloat(lastInGroup.endTime);
     
-    if (timeGap <= 8) {
+    if (timeGap <= 3) {
       // Merge into current group
       currentGroup.push(current);
     } else {
@@ -402,15 +407,17 @@ Transcript segment to analyze:
 "${transcript.transcript}"
 
 Determine if this segment:
-1. Is directly related to the main topic
+1. Is related to the main topic
 2. Provides relevant context or background information
 3. Is part of the main discussion
-4. Or if it's irrelevant content (like advertisements, unrelated segments, etc.)
+4. If its continuation of the previous relevant segment
+4. Or if it's completely irrelevant content (like advertisements, unrelated segments, etc.)
 
 Return result as JSON with this format:
 {
   "is_relevant": true/false,
-  "relevance_type": "main_topic" or "context" or "irrelevant",
+  "relevanceScore": 0-100,
+  "relevance_type": "main_topic" or "relevant" or "context" or "irrelevant",
   "explanation": "Brief explanation of why it is relevant or irrelevant"
 }
 `;
@@ -443,6 +450,7 @@ Return result as JSON with this format:
           relevantGroup.push({
             ...transcript,
             relevance_type: result.relevance_type,
+            relevanceScore: result.relevanceScore,
             relevance_explanation: result.explanation,
             visual_analysis: voiceAnalysis
           });
@@ -451,6 +459,7 @@ Return result as JSON with this format:
           relevantGroup.push({
             ...transcript,
             relevance_type: result.relevance_type,
+            relevanceScore: result.relevanceScore,
             relevance_explanation: result.explanation,
             visual_analysis: {
               voice_type: "unknown",
@@ -464,6 +473,7 @@ Return result as JSON with this format:
         irrelevantGroup.push({
           ...transcript,
           relevance_type: result.relevance_type,
+          relevanceScore: result.relevanceScore,
           relevance_explanation: result.explanation
         });
       }
@@ -478,6 +488,9 @@ Return result as JSON with this format:
   }
 
   // Merge close transcripts in relevant group
+  console.log('Relevant Group:',relevantGroup);
+  //const {selectedShots,totalDuration}= selectMostRelevantShotsWithin30sGreedy(relevantGroup);
+ // console.log('Most Relevant Shots:',selectedShots);
   const mergedGroups = mergeCloseTranscripts(relevantGroup);
  // const adjustedTranscripts = adjustTranscriptTimestampsWithShots(relevantGroup, shots);
   

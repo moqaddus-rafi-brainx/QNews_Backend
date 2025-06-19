@@ -3,7 +3,6 @@ const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
-const { mergeCloseTranscripts } = require('./openAIService');
 require('dotenv').config();
 
 const openai = new OpenAI({
@@ -55,6 +54,48 @@ async function analyzeVideoLabels(labels) {
     throw new Error('Failed to analyze video labels');
   }
 }
+
+/**
+ * Merges transcripts that are close in time (within 8 seconds)
+ * @param {Array} transcripts - Array of transcript objects
+ * @returns {Array} Array of merged transcript groups
+ */
+function mergeCloseTranscripts(transcripts) {
+  if (!transcripts || transcripts.length === 0) return [];
+  
+  // Sort transcripts by start time
+  const sortedTranscripts = [...transcripts].sort((a, b) => 
+    parseFloat(a.startTime) - parseFloat(b.startTime)
+  );
+  
+  const mergedGroups = [];
+  let currentGroup = [sortedTranscripts[0]];
+  
+  for (let i = 1; i < sortedTranscripts.length; i++) {
+    const current = sortedTranscripts[i];
+    const lastInGroup = currentGroup[currentGroup.length - 1];
+    
+    // Check if current transcript is within 8 seconds of the last transcript in the group
+    const timeGap = parseFloat(current.startTime) - parseFloat(lastInGroup.endTime);
+    
+    if (timeGap <= 3) {
+      // Merge into current group
+      currentGroup.push(current);
+    } else {
+      // Start new group
+      mergedGroups.push(currentGroup);
+      currentGroup = [current];
+    }
+  }
+  
+  // Add the last group
+  if (currentGroup.length > 0) {
+    mergedGroups.push(currentGroup);
+  }
+  
+  return mergedGroups;
+}
+
 
 /**
  * Extracts frames from all shots in a single FFmpeg command
@@ -382,8 +423,8 @@ Please analyze how relevant this shot is to the main topic. Provide:
  * @param {Array} shots - Array of shot objects with relevance information
  * @returns {Object} Object containing merged relevant shots and irrelevant shots
  */
-function separateAndMergeRelevantShots(shots) {
-  if (!shots || shots.length === 0) {
+function separateAndMergeRelevantShots(allShots) {
+  if (!allShots || allShots.length === 0) {
     return {
       relevantShots: [],
       irrelevantShots: []
@@ -391,8 +432,8 @@ function separateAndMergeRelevantShots(shots) {
   }
 
   // Separate relevant and irrelevant shots
-  const relevantShots = shots.filter(shot => shot.isRelevant);
-  const irrelevantShots = shots.filter(shot => !shot.isRelevant);
+  const relevantShots = allShots.filter(shot => shot.isRelevant);
+  const irrelevantShots = allShots.filter(shot => !shot.isRelevant);
 
   // Convert relevant shots to transcript-like format for merging
   const shotsForMerging = relevantShots.map(shot => ({
@@ -404,6 +445,7 @@ function separateAndMergeRelevantShots(shots) {
   }));
 
   // Merge close shots
+  //console.log('Select Shots:',selectShots);
   const mergedGroups = mergeCloseTranscripts(shotsForMerging);
 
   // Convert merged groups back to shot format
@@ -430,12 +472,140 @@ function separateAndMergeRelevantShots(shots) {
   };
 }
 
+/**
+ * Selects the most relevant shots (up to 30s total) using OpenAI
+ * @param {Array} shots - Array of shot objects: {startTime, endTime, description, relevanceScore}
+ * @returns {Promise<Array>} - Array of selected shots
+ */
+async function selectMostRelevantShotsWithin30s(shots) {
+  try {
+    // Filter only relevant shots
+    const relevantInputShots = shots.filter(shot => shot.isRelevant);
+    console.log('Relevant Input Shots:',relevantInputShots);
+    if (relevantInputShots.length === 0) {
+      return [];
+    }
+    // Prepare a summary of all relevant shots for the prompt
+    const shotList = relevantInputShots.map((shot, idx) => {
+      const duration = (shot.endTime - shot.startTime).toFixed(2);
+      return `Shot ${idx + 1}: [${shot.startTime}s - ${shot.endTime}s]\nDescription: ${shot.description}\nRelevance Score: ${shot.relevanceScore}`;
+    }).join('\n\n');
 
+    const prompt = `
+You are a video editor. You are given a list of video shots, each with a start time, end time, duration, description, and relevance score (0-100). Your task is to select the combination of shots that are the most relevant (highest total relevance score), but the total duration of all selected shots must be near 30 seconds. Prefer shots with higher relevance scores and more informative descriptions. Return the selected shots as a list of their indices (starting from 1), in the order they should appear.
+
+Shots:
+${shotList}
+
+Please respond with a JSON array of the selected shot indices, in order. Example: [2, 4, 5]
+
+Important: Before providing the array:
+1. Calculate the total duration of your selected shots
+2. Ensure it should be near 30 seconds
+3. Prioritize shots with higher relevance scores
+4. Try to maintain narrative coherence in the selection order
+`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        { role: "system", content: "You are a helpful assistant for video editing." },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 100,
+      temperature: 0.2
+    });
+
+    // Parse the response
+    const match = completion.choices[0].message.content.match(/\[.*\]/);
+    console.log('Completion:',completion.choices[0].message.content);
+    console.log('Match:',match);
+    let selectedIndices = [];
+    if (match) {
+      try {
+        selectedIndices = JSON.parse(match[0]);
+      } catch (e) {
+        console.error("Failed to parse OpenAI response:", completion.choices[0].message.content);
+        return [];
+      }
+    }
+
+    // Get the selected shots and verify total duration
+    const selectedShots = selectedIndices.map(idx => relevantInputShots[idx - 1]).filter(Boolean);
+    const totalDuration = selectedShots.reduce((sum, shot) => 
+      sum + (shot.endTime - shot.startTime), 0
+    );
+
+    if (totalDuration > 32) {
+      console.warn(`Selected shots exceed 30s (${totalDuration.toFixed(2)}s), adjusting selection...`);
+      // If we exceed 30s, take shots until we hit the limit
+      const adjustedShots = [];
+      let currentDuration = 0;
+      for (const shot of selectedShots) {
+        const shotDuration = shot.endTime - shot.startTime;
+        if (currentDuration + shotDuration <= 30) {
+          adjustedShots.push(shot);
+          currentDuration += shotDuration;
+        } else {
+          break;
+        }
+      }
+      return adjustedShots;
+    }
+
+    return selectedShots;
+  } catch (error) {
+    console.error('Error in selecting relevant shots:', error);
+    throw new Error('Failed to select relevant shots');
+  }
+}
+
+/**
+ * Selects the most relevant shots (up to 30s total) using a greedy algorithm.
+ * @param {Array} shots - Array of shot objects: {startTime, endTime, description, relevanceScore, isRelevant}
+ * @returns {Array} - Array of selected shots
+ */
+function selectMostRelevantShotsWithin30sGreedy(shots) {
+  // 1. Filter relevant shots based on either isRelevant or relevance_type
+  const relevantShots = shots.filter(shot => {
+    // If isRelevant field exists, use it
+    if ('isRelevant' in shot) {
+      return shot.isRelevant;
+    }
+    // Otherwise, use relevance_type
+    return shot.relevance_type !== "irrelevant";
+  });
+
+  if (relevantShots.length === 0) {
+    return { selectedShots: [], totalDuration: 0 };
+  }
+
+  // 2. Sort by relevanceScore descending
+  relevantShots.sort((a, b) => b.relevanceScore - a.relevanceScore);
+
+  // 3. Select shots until total duration >= 30s
+  const selectedShots = [];
+  selectedShots.push(relevantShots[0]);
+  let totalDuration = relevantShots[0].endTime - relevantShots[0].startTime;
+  for (const shot of relevantShots) {
+    const shotDuration = shot.endTime - shot.startTime;
+    if (totalDuration + shotDuration <= 30) {
+      selectedShots.push(shot);
+      totalDuration += shotDuration;
+    }
+    // Break if we've reached or exceeded 30s
+    if (totalDuration >= 30) break;
+  }
+
+  return { selectedShots, totalDuration };
+}
 
 module.exports = {
   analyzeVideoLabels,
   analyzeShots,
   extractFramesFromShots,
   analyzeShotRelevance,
-  separateAndMergeRelevantShots
+  separateAndMergeRelevantShots,
+  selectMostRelevantShotsWithin30s,
+  selectMostRelevantShotsWithin30sGreedy
 }; 

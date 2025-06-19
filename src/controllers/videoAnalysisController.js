@@ -4,10 +4,11 @@ const multer = require('multer');
 const { LANGUAGE_NAMES } = require('../constants/languages');
 const { extractAudioAndAnalyze, getTranscriptTimestamps } = require('../services/audioAnalysisService');
 const { groupRelatedTranscripts,analyzeMainTopic } = require('../services/openAIService');
-const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots} = require('../services/visualAnalysisService');
+const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots,selectMostRelevantShotsWithin30s,selectMostRelevantShotsWithin30sGreedy} = require('../services/visualAnalysisService');
 const uploadVideoToCloudinary = require('../services/cloudinaryUpload');
 const { removeClipFromVideo } = require('../services/videoTrimmingService');
 const { annotateVideoWithGoogle } = require('../services/googleService');
+const { generateVoiceOver, convertTextToSpeech } = require('../services/voiceOverGenerationService');
 require('dotenv').config();
 
 // Setup Google Cloud client with environment variables
@@ -19,7 +20,12 @@ const client = new VideoIntelligenceServiceClient({
 });
 
 // Configure multer for in-memory storage
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 100 * 1024 * 1024 // 100MB limit
+  }
+});
 
 /**
  * Analyzes a video file and returns comprehensive analysis results
@@ -30,7 +36,7 @@ async function analyzeVideo(fileBuffer,decription) {
   try {
     // Analyze audio first
     const audioAnalysis = await extractAudioAndAnalyze(fileBuffer);
-    //console.log('Audio Analysis:', audioAnalysis);
+    console.log('Audio Analysis:', audioAnalysis);
 
     // Use the new Google Service for video annotation
     const operationResult = await annotateVideoWithGoogle(fileBuffer, audioAnalysis.detectedLanguage);
@@ -128,11 +134,14 @@ async function analyzeVideo(fileBuffer,decription) {
 
      if (!mainTopicUsingTranscripts.is_news || mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic")
      {
+        console.log("mainTopicUsingTranscripts.is_news",mainTopicUsingTranscripts);
        // Analyze video labels using OpenAI
          mainTopicUsingLabels = await analyzeVideoLabels(labels);
          // Analyze each shot using OpenAI Vision
          shotAnalyses = await analyzeShots(fileBuffer, shots);
          shotRelevance= await analyzeShotRelevance(shotAnalyses,decription);
+          //const {selectedShots,totalDuration}= await selectMostRelevantShotsWithin30sGreedy(shotRelevance.shots);
+         // console.log('Most Relevant Shots:',selectedShots);
          language=shotRelevance.detectedLanguage;
          mainTopic=shotRelevance.mainTopic;
          summary=shotRelevance.summary;
@@ -142,26 +151,30 @@ async function analyzeVideo(fileBuffer,decription) {
         //  console.log('Is News:',isNews);
         //  console.log('Shot Relevance:',shotRelevance);
          
+         //mergedShots=separateAndMergeRelevantShots(selectedShots,shotRelevance.shots);
          mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
          relevantContent=mergedShots.relevantShots;
+         //const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
+         //console.log('Voice Over:',voiceOver);
          irrelevantContent=mergedShots.irrelevantShots;
      }
      else
      {
       const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
       const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer, shots,mainTopicUsingTranscripts);
-      //console.log('Grouped Transcripts:', groupedTranscripts);
+      console.log('Grouped Transcripts:', groupedTranscripts);
       mainTopic=groupedTranscripts.main_topic;
       summary=groupedTranscripts.summary;
       isNews=groupedTranscripts.is_news;
       category=groupedTranscripts.category;
       language=LANGUAGE_NAMES[(speechTranscripts[0]?.languageCode || '').toLowerCase()] || 'Unknown';
+      console.log('Language:',language);
       relevantContent=groupedTranscripts.relevant_content.mergedContent;
       irrelevantContent=groupedTranscripts.irrelevant_content;
 
       
      }
-     isNews=true;
+     //isNews=true;
     
 
    
@@ -174,8 +187,11 @@ async function analyzeVideo(fileBuffer,decription) {
       summary,
       isNews,
       category,
+      //shotRelevance,
       relevantContent,
       irrelevantContent,
+      //mergedShots,
+      //mostRelevantShots,
       shots,
     operationResult
     };
@@ -211,7 +227,7 @@ async function processVideo(fileBuffer,decription) {
     console.log('Segments to keep:', segmentsToKeep);
 
 
-    let clippedVideoUrl;
+    let clippedVideoUrl="";
     
     //Only proceed with video clipping if there are segments to keep
     if (segmentsToKeep.length > 0) {
@@ -254,9 +270,10 @@ async function handleVideoUpload(req, res) {
       return res.status(400).json({ error: 'No video file uploaded' });
     }
 
-   // const decription=`Ahmedabad, Jun 12 (EFE).- A passenger plane operated by Air India, carrying an estimated 200 people, crashed Thursday near the airport in Ahmedabad, a city in the western Indian state of Gujarat.\n\n \"Flight AI171, operating Ahmedabad–London Gatwick, was involved in an incident today, 12 June 2025. At this moment, we are ascertaining the details and will share further updates at the earliest\", Air India said in a statement. `
-    const decription="";
-    const results = await processVideo(req.file.buffer,decription);
+    const description = req.body.summary || "";
+    const results = await processVideo(req.file.buffer, description);
+
+    console.log('Description:', description);
     res.json(results);
 
   } catch (error) {
