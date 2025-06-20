@@ -13,6 +13,7 @@ function uploadVideoToCloudinary(buffer, folder = 'my_videos') {
       {
         resource_type: 'video',
         folder,
+        timeout: 300000
       },
       (error, result) => {
         if (error) return reject(error);

@@ -6,7 +6,7 @@ const { extractAudioAndAnalyze, getTranscriptTimestamps } = require('../services
 const { groupRelatedTranscripts,analyzeMainTopic } = require('../services/openAIService');
 const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots,selectMostRelevantShotsWithin30s,selectMostRelevantShotsWithin30sGreedy} = require('../services/visualAnalysisService');
 const { uploadVideoToCloudinary } = require('../services/cloudinaryUpload');
-const { removeClipFromVideo } = require('../services/videoTrimmingService');
+const { removeClipFromVideo,overlayAudioOnVideo } = require('../services/videoTrimmingService');
 const { annotateVideoWithGoogle } = require('../services/googleService');
 const { generateVoiceOver, convertTextToSpeech } = require('../services/voiceOverGenerationService');
 require('dotenv').config();
@@ -116,6 +116,7 @@ async function analyzeVideo(fileBuffer,description) {
     let irrelevantContent = null;
     let isNews = null;
     let category = null;
+    let audioDuration = null;
     const mainTopicUsingTranscripts = await analyzeMainTopic(speechTranscripts,description);
 
     //Analyze video labels using OpenAI
@@ -142,17 +143,17 @@ async function analyzeVideo(fileBuffer,description) {
          shotRelevance= await analyzeShotRelevance(shotAnalyses,description);
         const {selectedShots,totalDuration}= await selectMostRelevantShotsWithin30sGreedy(shotRelevance.shots);
         // console.log('Most Relevant Shots:',selectedShots);
+        audioDuration=totalDuration;
          language=shotRelevance.detectedLanguage;
          mainTopic=shotRelevance.mainTopic;
          summary=shotRelevance.summary;
-         isNews=shotRelevance.isNewsVideo;
          category=shotRelevance.newsCategory;
         //  console.log('Category:',category);
         //  console.log('Is News:',isNews);
         //  console.log('Shot Relevance:',shotRelevance);
          
-        // mergedShots=separateAndMergeRelevantShots(selectedShots,shotRelevance.shots);
-         mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
+         mergedShots=separateAndMergeRelevantShots(selectedShots,shotRelevance.shots);
+         //mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
          relevantContent=mergedShots.relevantShots;
         //  const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
         //  console.log('Voice Over:',voiceOver);
@@ -167,11 +168,12 @@ async function analyzeVideo(fileBuffer,description) {
       console.log('Grouped Transcripts:', groupedTranscripts);
       mainTopic=groupedTranscripts.main_topic;
       summary=groupedTranscripts.summary;
-      isNews=groupedTranscripts.is_news;
       category=groupedTranscripts.category;
+      audioDuration=groupedTranscripts.totalDuration;
       language=LANGUAGE_NAMES[(speechTranscripts[0]?.languageCode || '').toLowerCase()] || 'Unknown';
       console.log('Language:',language);
       relevantContent=groupedTranscripts.relevant_content.mergedContent;
+
       irrelevantContent=groupedTranscripts.irrelevant_content;
 
       
@@ -187,11 +189,11 @@ async function analyzeVideo(fileBuffer,description) {
       language,
       mainTopic,
       summary,
-      isNews,
       category,
       //shotRelevance,
       relevantContent,
       irrelevantContent,
+      audioDuration,
       //mergedShots,
       //mostRelevantShots,
       shots,
@@ -230,21 +232,33 @@ async function processVideo(fileBuffer,description) {
 
 
     let clippedVideoUrl="";
+    let videoWithAudioUrl="";
     
     //Only proceed with video clipping if there are segments to keep
     if (segmentsToKeep.length > 0) {
       // Get the total duration from the last shot or use a default
-      const totalDuration = analysisResults.shots[analysisResults.shots.length - 1]?.endTime || 70;
+       const totalDuration = analysisResults.shots[analysisResults.shots.length - 1]?.endTime || 70;
 
       // Upload video to Cloudinary
     const videoUrl = await uploadVideoToCloudinary(fileBuffer);
-    //console.log('Video uploaded to Cloudinary:', videoUrl);
+    console.log('Video uploaded to Cloudinary:', videoUrl);
+    //const videoUrl='https://res.cloudinary.com/ds0opfsmi/video/upload/v1750403161/my_videos/n6laqunc2xjn75dco6nm.mp4'
 
-      // Call removeClipFromVideo with the segments
-      const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
-      //console.log('Render ID:', renderId);
+      //Call removeClipFromVideo with the segments
+     const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
+      console.log('Render ID:', renderId);
       const ownerId = process.env.OWNER_ID;
-      clippedVideoUrl = `https://shotstack-api-v1-output.s3-ap-southeast-2.amazonaws.com/${ownerId}/${renderId}.mp4`;
+      clippedVideoUrl = renderId.url;
+      
+      //Generate voice over and overlay it on the video.`https://shotstack-api-v1-output.s3-ap-southeast-2.amazonaws.com/${ownerId}/${videoWithAudioId}.mp4`;
+      const voiceOver=await generateVoiceOver(analysisResults.summary,analysisResults.relevantContent,analysisResults.audioDuration); 
+      console.log('Voice Over:',voiceOver);
+      const audioUrl=await convertTextToSpeech(voiceOver,analysisResults.language);
+      console.log('Audio URL:',audioUrl);
+      const videoWithAudioId=await overlayAudioOnVideo(clippedVideoUrl,audioUrl,analysisResults.audioDuration);
+      videoWithAudioUrl = videoWithAudioId.url;
+      console.log('Video with Audio URL:',videoWithAudioUrl);
+    
     } else {
       // If no segments to keep, use the original video URL
       clippedVideoUrl = "";
@@ -252,7 +266,8 @@ async function processVideo(fileBuffer,description) {
 
     return {
       ...analysisResults,
-      clippedVideoUrl
+      clippedVideoUrl,
+      videoWithAudioUrl
     };
   } catch (error) {
     console.error('Error in video processing:', error);

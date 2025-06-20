@@ -336,12 +336,11 @@ ${shotDescriptions}
 Please provide your response in the following exact format:
 
 Main Topic: [${decription ? 'Extract main topic primarily from the description, supported by visual evidence from shots' : 'Extract main topic from visual descriptions'}]
-Summary: [${decription ? 'Combine the description context with visual evidence to create a comprehensive summary' : 'Summary based on visual descriptions'}]
+Summary: [${decription ? 'Combine the description context with visual evidence to create a comprehensive news article' : 'Comprehensive news article based on visual descriptions'}]
 Language: [Detected language or 'Unknown' if not detectable]
-Is News Video: [true/false] - ${decription ? 'Based on the description and visual evidence, determine if this is a news event.' : 'Determine if the described visuals could potentially belong to a news-related video, even if there is no audio, captions, or clear news formatting.'} Consider events such as protest, war, disasters, political activities, emergencies, social events, public speeches, broadcast etc.
 News Category: [If it is news, specify the category: politics/human rights/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)]
 
-Note: Please maintain this exact format with the labels "Main Topic:", "Summary:", "Language:", "Is News Video:", and "News Category:" followed by your response. For "Is News Video:", respond with only "true" or "false".`
+Note: Please maintain this exact format with the labels "Main Topic:", "Summary:", "Language:", and "News Category:" followed by your response.`
         }
       ],
       max_tokens: 300
@@ -353,13 +352,11 @@ Note: Please maintain this exact format with the labels "Main Topic:", "Summary:
     const mainTopicMatch = mainTopicResponse.match(/Main Topic:\s*([^\n]+)/);
     const summaryMatch = mainTopicResponse.match(/Summary:\s*([^\n]+)/);
     const languageMatch = mainTopicResponse.match(/Language:\s*([^\n]+)/);
-    const isNewsMatch = mainTopicResponse.match(/Is News Video:\s*(true|false)/i);
     const newsCategoryMatch = mainTopicResponse.match(/News Category:\s*([^\n]+)/);
 
     const mainTopic = mainTopicMatch ? mainTopicMatch[1].trim() : '';
     const summary = summaryMatch ? summaryMatch[1].trim() : '';
     const detectedLanguage = languageMatch ? languageMatch[1].trim() : 'Unknown';
-    const isNewsVideo = isNewsMatch ? isNewsMatch[1].toLowerCase() === 'true' : false;
     const newsCategory = newsCategoryMatch ? newsCategoryMatch[1].trim() : '';
     // Now analyze each shot's relevance to the main topic
     const relevanceAnalysis = await Promise.all(
@@ -378,8 +375,7 @@ Note: Please maintain this exact format with the labels "Main Topic:", "Summary:
 Shot Description: ${shot.description}
 
 Please analyze how relevant this shot is to the main topic. Provide:
-1. Relevance Score (0-100): How closely related is this shot to the main topic or summary of the video?
-2. Relevance Explanation: Brief explanation of why this shot is or isn't relevant
+1. Relevance Score (0-100): How relevant and important is this shot to the main topic or summary of the video?
 3. Is Relevant (true/false): Based on the score, is this shot relevant enough to keep?`
             }
           ],
@@ -390,7 +386,6 @@ Please analyze how relevant this shot is to the main topic. Provide:
         
         // Parse the analysis to extract structured data
         const scoreMatch = analysis.match(/Relevance Score:\s*(\d+)/);
-        const explanationMatch = analysis.match(/Relevance Explanation:\s*([^\n]+)/);
         const isRelevantMatch = analysis.match(/Is Relevant:\s*(true|false)/i);
 
         return {
@@ -398,7 +393,6 @@ Please analyze how relevant this shot is to the main topic. Provide:
           endTime: shot.endTime,
           description: shot.description,
           relevanceScore: scoreMatch ? parseInt(scoreMatch[1]) : 0,
-          relevanceExplanation: explanationMatch ? explanationMatch[1].trim() : '',
           isRelevant: isRelevantMatch ? isRelevantMatch[1].toLowerCase() === 'true' : false
         };
       })
@@ -408,7 +402,6 @@ Please analyze how relevant this shot is to the main topic. Provide:
       mainTopic,
       summary,
       detectedLanguage,
-      isNewsVideo,
       newsCategory,
       shots: relevanceAnalysis
     };
@@ -423,7 +416,7 @@ Please analyze how relevant this shot is to the main topic. Provide:
  * @param {Array} shots - Array of shot objects with relevance information
  * @returns {Object} Object containing merged relevant shots and irrelevant shots
  */
-function separateAndMergeRelevantShots(allShots) {
+function separateAndMergeRelevantShots(selectShots,allShots) {
   if (!allShots || allShots.length === 0) {
     return {
       relevantShots: [],
@@ -432,8 +425,8 @@ function separateAndMergeRelevantShots(allShots) {
   }
 
   // Separate relevant and irrelevant shots
-  const relevantShots = allShots.filter(shot => shot.isRelevant);
-  //const relevantShots = selectShots;
+  //const relevantShots = allShots.filter(shot => shot.isRelevant);
+  const relevantShots = selectShots;
   const irrelevantShots = allShots.filter(shot => !shot.isRelevant);
 
   // Convert relevant shots to transcript-like format for merging
@@ -441,13 +434,12 @@ function separateAndMergeRelevantShots(allShots) {
     startTime: shot.startTime,
     endTime: shot.endTime,
     description: shot.description,
-    relevanceScore: shot.relevanceScore,
-    relevanceExplanation: shot.relevanceExplanation
+    relevanceScore: shot.relevanceScore
   }));
 
   // Merge close shots
   //console.log('Select Shots:',selectShots);
-    const mergedGroups = mergeCloseTranscripts(shotsForMerging);
+    const mergedGroups = mergeCloseTranscripts(selectShots);
 
   // Convert merged groups back to shot format
   const mergedRelevantShots = mergedGroups.map(group => {
@@ -461,7 +453,6 @@ function separateAndMergeRelevantShots(allShots) {
       endTime: group[group.length - 1].endTime,
       description: bestShot.description,
       relevanceScore: bestShot.relevanceScore,
-      relevanceExplanation: bestShot.relevanceExplanation,
       isRelevant: true,
       mergedShots: group.length
     };
@@ -588,15 +579,35 @@ function selectMostRelevantShotsWithin30sGreedy(shots) {
   const selectedShots = [];
   selectedShots.push(relevantShots[0]);
   let totalDuration = relevantShots[0].endTime - relevantShots[0].startTime;
-  for (const shot of relevantShots) {
-    const shotDuration = shot.endTime - shot.startTime;
-    if (totalDuration + shotDuration <= 30) {
+  for(const shot of relevantShots){
+    if(shot===relevantShots[0]) continue;
+    let shotDuration = shot.endTime - shot.startTime;
+    if(totalDuration<25 && totalDuration+shotDuration>=35){
+      const remainingDuration = 30 - totalDuration;
+      shot.endTime = shot.startTime + remainingDuration;
       selectedShots.push(shot);
-      totalDuration += shotDuration;
+      shotDuration = shot.endTime - shot.startTime;
+      totalDuration+=shotDuration;
     }
-    // Break if we've reached or exceeded 30s
-    if (totalDuration >= 30) break;
+    if(totalDuration>=25) break;
+
+    selectedShots.push(shot);
+    shotDuration = shot.endTime - shot.startTime;
+    totalDuration+=shotDuration;
   }
+  // for (const shot of relevantShots) {
+  //   if(shot===relevantShots[0]) continue;
+  //   const shotDuration = shot.endTime - shot.startTime;
+  //   if (totalDuration + shotDuration <= 30) {
+  //     selectedShots.push(shot);
+  //     totalDuration += shotDuration;
+  //   }
+  //   // Break if we've reached or exceeded 30s
+  //   if (totalDuration >= 30) break;
+  // }
+
+  console.log('Selected Shots:',selectedShots);
+  console.log('Total Duration:',totalDuration);
 
   return { selectedShots, totalDuration };
 }

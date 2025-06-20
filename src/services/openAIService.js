@@ -232,16 +232,14 @@ ${description ? `Here is the description about the video:
 
 Analyze this content and provide:
 1. The main topic or subject being discussed( if detectable )
-2. Whether this can be a news content.
-3. If it is news, what general news category it belongs to for example: politics/human rights/technology/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)
+3. what general news category it belongs to for example: politics/human rights/technology/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)
 4. Is it AI generated or not?
-5. Is the transcript sufficient for analysis? (true if transcript contains meaningful, coherent content; false if transcript is too short, incomplete, or lacks useful information)
+5. Is the transcript sufficient for analysis? (true if transcript contains meaningful information, coherent content; false if transcript is too short(like few random words), or lacks meaningful information)
 
 Return result as JSON with this format:
 {
   "main_topic": "Brief description of the main topic",
-  "summary": "2-3 sentence summary of the content",
-  "is_news": true/false,
+  "summary": "A short news article of 2-3 sentences",
   "category": "politics/human rights/sports/entertainment/social/technology/natural disaster/economy/environment/war/crime/celebration/(etc...)",
   "is_ai_generated": true/false,
   "is_sufficient": true/false
@@ -264,7 +262,6 @@ Return result as JSON with this format:
     return {
       main_topic: "Unknown topic",
       summary: "Failed to analyze main topic",
-      is_news: false,
       category: "other",
       is_sufficient: false
     };
@@ -410,19 +407,11 @@ Main topic of the video:
 Transcript segment to analyze:
 "${transcript.transcript}"
 
-Determine if this segment:
-1. Is related to the main topic
-2. Provides relevant context or background information
-3. Is part of the main discussion
-4. If its continuation of the previous relevant segment
-4. Or if it's completely irrelevant content (like advertisements, unrelated segments, etc.)
-
+Determine if this segment is relevant to the main topic of the video or completely irrelevant.
 Return result as JSON with this format:
 {
   "is_relevant": true/false,
   "relevanceScore": 0-100,
-  "relevance_type": "main_topic" or "relevant" or "context" or "irrelevant",
-  "explanation": "Brief explanation of why it is relevant or irrelevant"
 }
 `;
 
@@ -453,18 +442,14 @@ Return result as JSON with this format:
           
           relevantGroup.push({
             ...transcript,
-            relevance_type: result.relevance_type,
             relevanceScore: result.relevanceScore,
-            relevance_explanation: result.explanation,
             //visual_analysis: voiceAnalysis
           });
         } catch (error) {
           console.error(`Error processing frames for transcript at ${transcript.startTime}-${transcript.endTime}:`, error);
           relevantGroup.push({
             ...transcript,
-            relevance_type: result.relevance_type,
             relevanceScore: result.relevanceScore,
-            relevance_explanation: result.explanation,
             visual_analysis: {
               voice_type: "unknown",
               confidence: "low",
@@ -476,26 +461,23 @@ Return result as JSON with this format:
       } else {
         irrelevantGroup.push({
           ...transcript,
-          relevance_type: result.relevance_type,
           relevanceScore: result.relevanceScore,
-          relevance_explanation: result.explanation
         });
       }
     } catch (e) {
       console.error("Failed to parse OpenAI response for transcript relevance:", text);
       relevantGroup.push({
         ...transcript,
-        relevance_type: "unknown",
-        relevance_explanation: "Error analyzing relevance"
+        relevanceScore: 0
       });
     }
   }
 
   // Merge close transcripts in relevant group
   console.log('Relevant Group:',relevantGroup);
-  //const {selectedShots,totalDuration}= selectMostRelevantShotsWithin30sGreedy(relevantGroup);
- // console.log('Most Relevant Shots:',selectedShots);
-  const mergedGroups = mergeCloseTranscripts(relevantGroup);
+  const {selectedShots,totalDuration}= selectMostRelevantShotsWithin30sGreedy(relevantGroup);
+  console.log('Most Relevant Shots:',selectedShots);
+  const mergedGroups = mergeCloseTranscripts(selectedShots);
  // const adjustedTranscripts = adjustTranscriptTimestampsWithShots(relevantGroup, shots);
   
   // Create merged and unmerged content sections
@@ -516,7 +498,6 @@ Return result as JSON with this format:
   return {
     main_topic: mainTopicAnalysis.main_topic,
     summary: mainTopicAnalysis.summary,
-    is_news: mainTopicAnalysis.is_news,
     category: mainTopicAnalysis.category,
     is_ai_generated: mainTopicAnalysis.is_ai_generated,
     //adjusted_transcripts: adjustedTranscripts,
@@ -528,9 +509,12 @@ Return result as JSON with this format:
       transcripts: irrelevantGroup,
       startTime: irrelevantGroup[0]?.startTime || "0",
       endTime: irrelevantGroup[irrelevantGroup.length - 1]?.endTime || "0"
-    }
+    },
+    totalDuration
   };
 }
+
+
 
 /**
  * Adjusts transcript timestamps to align with shot boundaries
