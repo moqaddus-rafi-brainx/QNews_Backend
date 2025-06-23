@@ -9,7 +9,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {number} baseDelay - Base delay in ms between retries
  * @returns {Promise<any>}
  */
-async function callWithRetry(fn, maxRetries = 5, baseDelay = 1000) {
+async function callWithRetry(fn, maxRetries = 5, baseDelay = 500) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await fn(); // Attempt the API call
@@ -50,7 +50,7 @@ async function callWithRetry(fn, maxRetries = 5, baseDelay = 1000) {
       // Calculate exponential backoff with jitter
       const exponentialDelay = baseDelay * Math.pow(2, attempt - 1);
       const jitter = Math.random() * 0.1 * exponentialDelay; // 10% jitter
-      const wait = Math.min(exponentialDelay + jitter, 60000); // Cap at 60 seconds
+      const wait = Math.min(exponentialDelay + jitter, 30000); // Cap at 30 seconds instead of 60
 
       console.warn(`🔁 Rate limit/quota hit (attempt ${attempt}/${maxRetries}). Retrying in ${(wait/1000).toFixed(1)}s`);
       console.warn(`Error details: ${error.message}`);
@@ -68,7 +68,7 @@ async function callWithRetry(fn, maxRetries = 5, baseDelay = 1000) {
  * @param {number} delayBetweenBatches - Delay in ms between batches
  * @returns {Promise<Array>} Array of results
  */
-async function processBatchWithRateLimit(items, processor, batchSize = 2, delayBetweenBatches = 4000) {
+async function processBatchWithRateLimit(items, processor, batchSize = 2, delayBetweenBatches = 2000) {
   const results = [];
   
   for (let i = 0; i < items.length; i += batchSize) {
@@ -78,7 +78,7 @@ async function processBatchWithRateLimit(items, processor, batchSize = 2, delayB
     try {
       const batchResults = await Promise.all(
         batch.map((item, index) => 
-          callWithRetry(() => processor(item, i + index), 5, 1500)
+          callWithRetry(() => processor(item, i + index), 5, 1000)
         )
       );
       

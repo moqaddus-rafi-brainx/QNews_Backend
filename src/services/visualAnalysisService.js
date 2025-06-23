@@ -215,6 +215,10 @@ async function extractFramesFromShots(videoBuffer, shots) {
         try {
           for (let i = 0; i < shots.length; i++) {
             await processShot(shots[i], i);
+            // Small delay between shots to prevent overwhelming the system
+            if (i < shots.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
           }
           
           // Cleanup video file
@@ -262,7 +266,7 @@ async function analyzeShot(frames) {
     
     console.log(`📸 Analyzing shot with ${frames.length} frames`);
     
-    // Process frames in batches to avoid rate limits
+    // Frame processor function for batch processing
     const frameProcessor = async (frame, index) => {
       console.log(`📸 Analyzing frame #${index + 1}/${frames.length}`);
       
@@ -288,14 +292,46 @@ async function analyzeShot(frames) {
 
       return completion.choices[0].message.content.trim();
     };
-
+    
     // Process frames in small batches with delays to avoid rate limits
-    const frameDescriptions = await processBatchWithRateLimit(
-      frames, 
-      frameProcessor, 
-      2, // Process 2 frames at a time
-      3000 // 3 second delay between batches
-    );
+    let frameDescriptions;
+    if (frames.length <= 4) {
+      // For 4 or fewer frames, process them all at once to speed up
+      console.log(`🚀 Processing all ${frames.length} frames in parallel`);
+      frameDescriptions = await Promise.all(
+        frames.map(async (frame, index) => {
+          console.log(`📸 Analyzing frame #${index + 1}/${frames.length}`);
+          const completion = await callWithRetry(() =>
+            openai.chat.completions.create({
+              model: "gpt-4o",
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a video content analyzer. Your task is to describe what is shown in this frame from a video shot."
+                },
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: "Please describe what is shown in this frame." },
+                    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${frame}` } }
+                  ]
+                }
+              ],
+              max_tokens: 100
+            })
+          );
+          return completion.choices[0].message.content.trim();
+        })
+      );
+    } else {
+      // For more than 4 frames, use batch processing
+      frameDescriptions = await processBatchWithRateLimit(
+        frames, 
+        frameProcessor, 
+        4, // Process 4 frames at a time (all frames for a shot)
+        1000 // 1 second delay between batches
+      );
+    }
     
     // Combine all frame descriptions into a comprehensive shot description
     const combinedCompletion = await callWithRetry(() =>
@@ -354,7 +390,7 @@ async function analyzeShots(videoBuffer, shots) {
       shots,
       shotProcessor,
       1, // Process 1 shot at a time to be conservative
-      2000 // 2 second delay between shots
+      1000 // 1 second delay between shots
     );
 
     return shotAnalyses;
@@ -463,7 +499,7 @@ Please analyze how relevant this shot is to the main topic. Provide:
       shots,
       relevanceProcessor,
       2, // Process 2 shots at a time
-      2500 // 2.5 second delay between batches
+      1500 // 1.5 second delay between batches
     );
 
     return {
