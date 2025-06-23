@@ -11,7 +11,6 @@ const openai = new OpenAI({
 });
 
 
-const delayBetweenFrames = (ms = 300) => new Promise(res => setTimeout(res, ms));
 
 
 /**

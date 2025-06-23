@@ -221,7 +221,7 @@ You are an expert content analyzer.
 
 Your task is to analyze the transcript and provide insights about the video content. However, please keep in mind:
 - The transcript may be very short(like few random words), incomplete, or contain minimal/no useful information.
-- IMPORTANT: The "is_sufficient" field should be determined ONLY by the transcript content, NOT by the description. A transcript is considered insufficient if it contains few random words, that lacks meaningful information.
+- IMPORTANT: The "is_sufficient" field should be determined ONLY by the transcript content, NOT by the description. A transcript is considered insufficient if it contains few words, and lacks meaningful information.
 
 Here is the complete transcript of a video:
 "${combinedTranscript}"
@@ -398,19 +398,15 @@ async function groupRelatedTranscripts(transcripts, videoBuffer,shots,mainTopic)
   
   for (const transcript of transcripts) {
     const prompt = `
-You are an expert content analyzer. Determine if this transcript segment is relevant to the main topic of the video.
+Analyze if this transcript segment is relevant and important to the main topic.
 
-Main topic of the video:
-"${mainTopicAnalysis.main_topic}"
+Main topic: "${mainTopicAnalysis.main_topic}"
+Segment: "${transcript.transcript}"
 
-Transcript segment to analyze:
-"${transcript.transcript}"
-
-Determine if this segment is relevant to the main topic of the video or completely irrelevant.
-Return result as JSON with this format:
+Assess relevance and importance. Return JSON:
 {
   "is_relevant": true/false,
-  "relevanceScore": 0-100,
+  "relevanceScore": 0-100
 }
 `;
 
