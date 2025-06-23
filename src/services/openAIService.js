@@ -86,127 +86,127 @@ async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameR
  */
 
 //Not using this one.
-async function analyzeWithOpenAI(data) {
-  const { speechTranscripts, labels, shots } = data;
+// async function analyzeWithOpenAI(data) {
+//   const { speechTranscripts, labels, shots } = data;
 
-  const combinedTranscript = speechTranscripts
-    .map(t => t.transcript)
-    .filter(Boolean)
-    .join(' ');
+//   const combinedTranscript = speechTranscripts
+//     .map(t => t.transcript)
+//     .filter(Boolean)
+//     .join(' ');
 
-  const labelDescriptions = labels.map(label => {
-    return `Label: ${label.description}, Timestamps: ${label.segments.map(s => `${s.startTime}s-${s.endTime}s`).join(', ')}`;
-  }).join('\n');
+//   const labelDescriptions = labels.map(label => {
+//     return `Label: ${label.description}, Timestamps: ${label.segments.map(s => `${s.startTime}s-${s.endTime}s`).join(', ')}`;
+//   }).join('\n');
 
-  const shotTimestamps = shots.map(s => `${s.startTime}s - ${s.endTime}s`).join(', ');
+//   const shotTimestamps = shots.map(s => `${s.startTime}s - ${s.endTime}s`).join(', ');
 
-  const prompt = `
-You are an expert multimedia content analyst.
+//   const prompt = `
+// You are an expert multimedia content analyst.
 
-Here is a video transcript:
-"${combinedTranscript}"
+// Here is a video transcript:
+// "${combinedTranscript}"
 
-Visual labels with timestamps:
-${labelDescriptions}
+// Visual labels with timestamps:
+// ${labelDescriptions}
 
-Shot timestamps (scene changes):
-${shotTimestamps}
+// Shot timestamps (scene changes):
+// ${shotTimestamps}
 
-Based on the above data, answer these questions:
+// Based on the above data, answer these questions:
 
-1. Is this video news-related? (yes or no)
-2. What is the general news category? Choose from: politics, sports, entertainment, social, natural disaster, economy, environment, other
-3. Provide a 2-3 line summary of the news.
-4. Provide the timestamp(s) of the segment where the main news is discussed (e.g., ["12s-55s", "1:00-1:30"]).
-5. Based on the transcript and scene changes, does the voice seem like a voiceover (narration only), or is the speaker likely visible in the video?
+// 1. Is this video news-related? (yes or no)
+// 2. What is the general news category? Choose from: politics, sports, entertainment, social, natural disaster, economy, environment, other
+// 3. Provide a 2-3 line summary of the news.
+// 4. Provide the timestamp(s) of the segment where the main news is discussed (e.g., ["12s-55s", "1:00-1:30"]).
+// 5. Based on the transcript and scene changes, does the voice seem like a voiceover (narration only), or is the speaker likely visible in the video?
 
-Return result as JSON with this format:
+// Return result as JSON with this format:
 
-{
-  "is_news_related": true,
-  "news_category": "Politics",
-  "summary": "The speaker discusses recent government reforms and opposition reactions.",
-  "relevant_timestamps": ["10s-45s"],
-  "voice_type": "voiceover" // or "speaker visible"
-}
-`;
+// {
+//   "is_news_related": true,
+//   "news_category": "Politics",
+//   "summary": "The speaker discusses recent government reforms and opposition reactions.",
+//   "relevant_timestamps": ["10s-45s"],
+//   "voice_type": "voiceover" // or "speaker visible"
+// }
+// `;
 
-  const response = await openai.createChatCompletion({
-    model: "gpt-4",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.4
-  });
+//   const response = await openai.createChatCompletion({
+//     model: "gpt-4",
+//     messages: [{ role: "user", content: prompt }],
+//     temperature: 0.4
+//   });
 
-  const text = response.data.choices[0].message.content;
+//   const text = response.data.choices[0].message.content;
 
-  try {
-    const jsonStart = text.indexOf('{');
-    return JSON.parse(text.slice(jsonStart));
-  } catch (e) {
-    console.error("Failed to parse OpenAI response:", text);
-    throw new Error("Invalid JSON format from OpenAI");
-  }
-}
+//   try {
+//     const jsonStart = text.indexOf('{');
+//     return JSON.parse(text.slice(jsonStart));
+//   } catch (e) {
+//     console.error("Failed to parse OpenAI response:", text);
+//     throw new Error("Invalid JSON format from OpenAI");
+//   }
+// }
 
-/**
- * Analyzes individual transcripts to determine if they are news-related and their category
- * @param {Array} transcripts - Array of transcript objects with timestamps
- * @returns {Promise<Array>} Array of analysis results for each transcript
- * Not using this one.
- */
-async function analyzeTranscriptsIndividually(transcripts) {
-  const results = [];
+// /**
+//  * Analyzes individual transcripts to determine if they are news-related and their category
+//  * @param {Array} transcripts - Array of transcript objects with timestamps
+//  * @returns {Promise<Array>} Array of analysis results for each transcript
+//  * Not using this one.
+//  */
+// async function analyzeTranscriptsIndividually(transcripts) {
+//   const results = [];
 
-  for (const transcript of transcripts) {
-    const prompt = `
-You are an expert news content analyzer.
+//   for (const transcript of transcripts) {
+//     const prompt = `
+// You are an expert news content analyzer.
 
-Here is a transcript segment:
-"${transcript.transcript}"
+// Here is a transcript segment:
+// "${transcript.transcript}"
 
-Based on this transcript, answer these questions:
+// Based on this transcript, answer these questions:
 
-1. Is this a News? (yes or no)
-2. What is the news category? Choose from: politics, sports, entertainment, social, natural disaster, economy, environment, war, crime, celebration, other
+// 1. Is this a News? (yes or no)
+// 2. What is the news category? Choose from: politics, sports, entertainment, social, natural disaster, economy, environment, war, crime, celebration, other
 
-Return result as JSON with this format:
-{
-  "is_news": true/false,
-  "category": "Politics",
-  "timestamp": "${transcript.startTime}s-${transcript.endTime}s"
-}
-`;
+// Return result as JSON with this format:
+// {
+//   "is_news": true/false,
+//   "category": "Politics",
+//   "timestamp": "${transcript.startTime}s-${transcript.endTime}s"
+// }
+// `;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.4
-    });
+//     const response = await openai.chat.completions.create({
+//       model: "gpt-4",
+//       messages: [{ role: "user", content: prompt }],
+//       temperature: 0.4
+//     });
 
-    const text = response.choices[0].message.content;
+//     const text = response.choices[0].message.content;
 
-    try {
-      const jsonStart = text.indexOf('{');
-      const result = JSON.parse(text.slice(jsonStart));
-      results.push({
-        ...result,
-        transcript: transcript.transcript,
-        languageCode: transcript.languageCode
-      });
-    } catch (e) {
-      console.error("Failed to parse OpenAI response for transcript:", text);
-      results.push({
-        is_news: false,
-        category: "unknown",
-        transcript: transcript.transcript,
-        timestamp: `${transcript.startTime}s-${transcript.endTime}s`,
-        error: "Failed to parse response"
-      });
-    }
-  }
+//     try {
+//       const jsonStart = text.indexOf('{');
+//       const result = JSON.parse(text.slice(jsonStart));
+//       results.push({
+//         ...result,
+//         transcript: transcript.transcript,
+//         languageCode: transcript.languageCode
+//       });
+//     } catch (e) {
+//       console.error("Failed to parse OpenAI response for transcript:", text);
+//       results.push({
+//         is_news: false,
+//         category: "unknown",
+//         transcript: transcript.transcript,
+//         timestamp: `${transcript.startTime}s-${transcript.endTime}s`,
+//         error: "Failed to parse response"
+//       });
+//     }
+//   }
 
-  return results;
-}
+//   return results;
+// }
 
 /**
  * Analyzes the entire content to determine the main topic, news category, and relevance
@@ -221,8 +221,7 @@ You are an expert content analyzer.
 
 Your task is to analyze the transcript and provide insights about the video content. However, please keep in mind:
 - The transcript may be very short(like few random words), incomplete, or contain minimal/no useful information.
-- If the transcript does not provide enough meaningful content to determine the topic, category, or news value, state that clearly in your response as "Transcript is too short to determine the main topic".
-- IMPORTANT: The "is_sufficient" field should be determined ONLY by the transcript content, NOT by the description. A transcript is considered sufficient if it contains meaningful, coherent content that can be analyzed for topic, category, and news value.
+- IMPORTANT: The "is_sufficient" field should be determined ONLY by the transcript content, NOT by the description. A transcript is considered insufficient if it contains few random words, that lacks meaningful information.
 
 Here is the complete transcript of a video:
 "${combinedTranscript}"
@@ -234,13 +233,13 @@ Analyze this content and provide:
 1. The main topic or subject being discussed( if detectable )
 3. what general news category it belongs to for example: politics/human rights/technology/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)
 4. Is it AI generated or not?
-5. Is the transcript sufficient for analysis? (true if transcript contains meaningful information, coherent content; false if transcript is too short(like few random words), or lacks meaningful information)
+5. Is the transcript sufficient for analysis? (true if transcript contains meaningful information, coherent content; false if transcript is too short containing few random words, or lacks meaningful information)
 
 Return result as JSON with this format:
 {
   "main_topic": "Brief description of the main topic",
   "summary": "A short news article of 2-3 sentences",
-  "category": "politics/human rights/sports/entertainment/social/technology/natural disaster/economy/environment/war/crime/celebration/(etc...)",
+  "category":"News category from mentioned categories",
   "is_ai_generated": true/false,
   "is_sufficient": true/false
   }
@@ -516,43 +515,40 @@ Return result as JSON with this format:
 
 
 
-/**
- * Adjusts transcript timestamps to align with shot boundaries
- * @param {Array} transcripts - Array of transcript objects with startTime and endTime
- * @param {Array} shots - Array of shot objects with startTime and endTime
- * @returns {Array} Array of transcripts with adjusted timestamps
- */
-function adjustTranscriptTimestampsWithShots(transcripts, shots) {
-  return transcripts.map(transcript => {
-    const transcriptStart = parseFloat(transcript.startTime);
-    const transcriptEnd = parseFloat(transcript.endTime);
+// /**
+//  * Adjusts transcript timestamps to align with shot boundaries
+//  * @param {Array} transcripts - Array of transcript objects with startTime and endTime
+//  * @param {Array} shots - Array of shot objects with startTime and endTime
+//  * @returns {Array} Array of transcripts with adjusted timestamps
+//  */
+// function adjustTranscriptTimestampsWithShots(transcripts, shots) {
+//   return transcripts.map(transcript => {
+//     const transcriptStart = parseFloat(transcript.startTime);
+//     const transcriptEnd = parseFloat(transcript.endTime);
     
-    // Find the shot that contains the transcript start time
-    const startShot = shots.find(shot => 
-      parseFloat(shot.startTime) <= transcriptStart && 
-      parseFloat(shot.endTime) >= transcriptStart
-    );
+//     // Find the shot that contains the transcript start time
+//     const startShot = shots.find(shot => 
+//       parseFloat(shot.startTime) <= transcriptStart && 
+//       parseFloat(shot.endTime) >= transcriptStart
+//     );
     
-    // Find the shot that contains the transcript end time
-    const endShot = shots.find(shot => 
-      parseFloat(shot.startTime) <= transcriptEnd && 
-      parseFloat(shot.endTime) >= transcriptEnd
-    );
+//     // Find the shot that contains the transcript end time
+//     const endShot = shots.find(shot => 
+//       parseFloat(shot.startTime) <= transcriptEnd && 
+//       parseFloat(shot.endTime) >= transcriptEnd
+//     );
     
-    // Create a new transcript object with adjusted timestamps
-    return {
-      ...transcript,
-      startTime: startShot ? startShot.startTime.toString() : transcript.startTime,
-      endTime: endShot ? endShot.endTime.toString() : transcript.endTime
-    };
-  });
-}
+//     // Create a new transcript object with adjusted timestamps
+//     return {
+//       ...transcript,
+//       startTime: startShot ? startShot.startTime.toString() : transcript.startTime,
+//       endTime: endShot ? endShot.endTime.toString() : transcript.endTime
+//     };
+//   });
+// }
 
 module.exports = {
   analyzeMainTopic,
-  analyzeWithOpenAI,
-  analyzeTranscriptsIndividually,
   groupRelatedTranscripts,
-  adjustTranscriptTimestampsWithShots,
   mergeCloseTranscripts
 };

@@ -4,10 +4,15 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 require('dotenv').config();
+const callWithRetry = require('../utils/callWithRetry');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+
+const delayBetweenFrames = (ms = 300) => new Promise(res => setTimeout(res, ms));
+
 
 /**
  * Generates a unique filename for temporary files
@@ -122,7 +127,7 @@ async function extractFramesFromShots(videoBuffer, shots) {
       // Create filter complex string for all shots
       const filterComplex = shots.map((shot, index) => {
         const duration = shot.endTime - shot.startTime;
-        const fps = 5 / duration; // Calculate fps to get exactly 5 frames
+        const fps = 4 / duration; // Calculate fps to get exactly 4 frames
         return `[0:v]trim=start=${shot.startTime}:end=${shot.endTime},setpts=PTS-STARTPTS,fps=${fps}[v${index}]`;
       }).join(';');
 
@@ -222,35 +227,71 @@ async function analyzeShot(frames) {
     }
     
     // Use all frames for analysis
-    const frameDescriptions = await Promise.all(frames.map(async (frame) => {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o", // Using the correct vision model
-        messages: [
-          {
-            role: "system",
-            content: "You are a video content analyzer. Your task is to describe what is shown in this frame from a video shot."
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Please describe what is shown in this frame. Focus on the main subjects, actions, and setting."
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:image/jpeg;base64,${frame}`
-                }
-              }
-            ]
-          }
-        ],
-        max_tokens: 100
-      });
-      return completion.choices[0].message.content.trim();
-    }));
+    // let count=1;
+    // const frameDescriptions = await Promise.all(frames.map(async (frame) => {
+    //   console.log('Doing frame analysis',count++);
+    //   const completion = await openai.chat.completions.create({
+    //     model: "gpt-4o", // Using the correct vision model
+    //     messages: [
+    //       {
+    //         role: "system",
+    //         content: "You are a video content analyzer. Your task is to describe what is shown in this frame from a video shot."
+    //       },
+    //       {
+    //         role: "user",
+    //         content: [
+    //           {
+    //             type: "text",
+    //             text: "Please describe what is shown in this frame. Focus on the main subjects, actions, and setting."
+    //           },
+    //           {
+    //             type: "image_url",
+    //             image_url: {
+    //               url: `data:image/jpeg;base64,${frame}`
+    //             }
+    //           }
+    //         ]
+    //       }
+    //     ],
+    //     max_tokens: 100
+    //   });
 
+    //   console.log("Completedddddd");
+    //   return completion.choices[0].message.content.trim();
+    // }));
+
+    const frameDescriptions = [];
+let count = 1;
+
+for (const frame of frames) {
+  console.log(`📸 Analyzing frame #${count++}`);
+
+  const completion = await callWithRetry(() =>
+    openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: "You are a video content analyzer. Your task is to describe what is shown in this frame from a video shot."
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Please describe what is shown in this frame." },
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${frame}` } }
+          ]
+        }
+      ],
+      max_tokens: 100
+    })
+  );
+
+  frameDescriptions.push(completion.choices[0].message.content.trim());
+
+  // Optional: wait between frames to avoid burst
+  await delayBetweenFrames(300); // 300ms
+}
+    
     // Combine all frame descriptions into a comprehensive shot description
     const combinedCompletion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -268,7 +309,7 @@ ${frameDescriptions.join('\n\n')}
 Please provide a single, coherent description that captures the main content and any changes or movements shown across these frames.`
         }
       ],
-      max_tokens: 150
+      max_tokens: 100
     });
 
     return combinedCompletion.choices[0].message.content.trim();
@@ -302,6 +343,18 @@ async function analyzeShots(videoBuffer, shots) {
       })
     );
 
+//     const shotAnalyses = [];
+
+// for (const shot of shots) {
+//   const frames = shotFrames.get(`${shot.startTime}-${shot.endTime}`) || [];
+//   const description = await analyzeShot(frames);
+//   shotAnalyses.push({
+//     startTime: shot.startTime,
+//     endTime: shot.endTime,
+//     description
+//   });
+// }
+
     return shotAnalyses;
   } catch (error) {
     console.error('Error in shots analysis:', error);
@@ -320,7 +373,7 @@ async function analyzeShotRelevance(shots, decription) {
     const shotDescriptions = shots.map(shot => shot.description).join('\n');
     
     const mainTopicCompletion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o",
       messages: [
         {
           role: "system",
@@ -362,7 +415,7 @@ Note: Please maintain this exact format with the labels "Main Topic:", "Summary:
     const relevanceAnalysis = await Promise.all(
       shots.map(async (shot) => {
         const relevanceCompletion = await openai.chat.completions.create({
-          model: "gpt-3.5-turbo",
+          model: "gpt-4",
           messages: [
             {
               role: "system",
@@ -545,6 +598,13 @@ Important: Before providing the array:
       return adjustedShots;
     }
 
+    if(totalDuration>60){
+      const lastShot = selectedShots[selectedShots.length - 1];
+      const excessDuration = totalDuration - 60;
+      lastShot.endTime = lastShot.endTime - excessDuration;
+      totalDuration = 60; // Recalculate totalDuration after modification
+    }
+
     return selectedShots;
   } catch (error) {
     console.error('Error in selecting relevant shots:', error);
@@ -595,16 +655,12 @@ function selectMostRelevantShotsWithin30sGreedy(shots) {
     shotDuration = shot.endTime - shot.startTime;
     totalDuration+=shotDuration;
   }
-  // for (const shot of relevantShots) {
-  //   if(shot===relevantShots[0]) continue;
-  //   const shotDuration = shot.endTime - shot.startTime;
-  //   if (totalDuration + shotDuration <= 30) {
-  //     selectedShots.push(shot);
-  //     totalDuration += shotDuration;
-  //   }
-  //   // Break if we've reached or exceeded 30s
-  //   if (totalDuration >= 30) break;
-  // }
+  if(totalDuration>60){
+    const lastShot = selectedShots[selectedShots.length - 1];
+    const excessDuration = totalDuration - 60;
+    lastShot.endTime = lastShot.endTime - excessDuration;
+    totalDuration = 60; // Recalculate totalDuration after modification
+  }
 
   console.log('Selected Shots:',selectedShots);
   console.log('Total Duration:',totalDuration);
