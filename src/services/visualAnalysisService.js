@@ -4,7 +4,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 require('dotenv').config();
-const callWithRetry = require('../utils/callWithRetry');
+const { callWithRetry, processBatchWithRateLimit } = require('../utils/callWithRetry');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -37,21 +37,23 @@ async function analyzeVideoLabels(labels) {
     Labels: ${labelDescriptions}
     Please provide a concise summary of the main topic.`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "You are a video content analyzer. Your task is to determine the main topic or theme of a video based on its visual labels and descriptions."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 150,
-      temperature: 0.7
-    });
+    const completion = await callWithRetry(() =>
+      openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "You are a video content analyzer. Your task is to determine the main topic or theme of a video based on its visual labels and descriptions."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 150,
+        temperature: 0.7
+      })
+    );
 
     return completion.choices[0].message.content.trim();
   } catch (error) {
@@ -226,91 +228,62 @@ async function analyzeShot(frames) {
       return "No frames could be extracted from this shot.";
     }
     
-    // Use all frames for analysis
-    // let count=1;
-    // const frameDescriptions = await Promise.all(frames.map(async (frame) => {
-    //   console.log('Doing frame analysis',count++);
-    //   const completion = await openai.chat.completions.create({
-    //     model: "gpt-4o", // Using the correct vision model
-    //     messages: [
-    //       {
-    //         role: "system",
-    //         content: "You are a video content analyzer. Your task is to describe what is shown in this frame from a video shot."
-    //       },
-    //       {
-    //         role: "user",
-    //         content: [
-    //           {
-    //             type: "text",
-    //             text: "Please describe what is shown in this frame. Focus on the main subjects, actions, and setting."
-    //           },
-    //           {
-    //             type: "image_url",
-    //             image_url: {
-    //               url: `data:image/jpeg;base64,${frame}`
-    //             }
-    //           }
-    //         ]
-    //       }
-    //     ],
-    //     max_tokens: 100
-    //   });
+    // Process frames in batches to avoid rate limits
+    const frameProcessor = async (frame, index) => {
+      console.log(`📸 Analyzing frame #${index + 1}`);
+      
+      const completion = await callWithRetry(() =>
+        openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: "You are a video content analyzer. Your task is to describe what is shown in this frame from a video shot."
+            },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Please describe what is shown in this frame." },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${frame}` } }
+              ]
+            }
+          ],
+          max_tokens: 100
+        })
+      );
 
-    //   console.log("Completedddddd");
-    //   return completion.choices[0].message.content.trim();
-    // }));
+      return completion.choices[0].message.content.trim();
+    };
 
-    const frameDescriptions = [];
-let count = 1;
-
-for (const frame of frames) {
-  console.log(`📸 Analyzing frame #${count++}`);
-
-  const completion = await callWithRetry(() =>
-    openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "You are a video content analyzer. Your task is to describe what is shown in this frame from a video shot."
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Please describe what is shown in this frame." },
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${frame}` } }
-          ]
-        }
-      ],
-      max_tokens: 100
-    })
-  );
-
-  frameDescriptions.push(completion.choices[0].message.content.trim());
-
-  // Optional: wait between frames to avoid burst
-  await delayBetweenFrames(300); // 300ms
-}
+    // Process frames in small batches with delays to avoid rate limits
+    const frameDescriptions = await processBatchWithRateLimit(
+      frames, 
+      frameProcessor, 
+      2, // Process 2 frames at a time
+      3000 // 3 second delay between batches
+    );
     
     // Combine all frame descriptions into a comprehensive shot description
-    const combinedCompletion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are a video content analyzer. Your task is to create a comprehensive description of a video shot based on multiple frame descriptions."
-        },
-        {
-          role: "user",
-          content: `Based on the following descriptions of 5 frames from the same shot, create a comprehensive description of what is shown in this shot:
+    const combinedCompletion = await callWithRetry(() =>
+      openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: "You are a video content analyzer. Your task is to create a comprehensive description of a video shot based on multiple frame descriptions."
+          },
+          {
+            role: "user",
+            content: `Based on the following descriptions of ${frames.length} frames from the same shot, create a comprehensive description of what is shown in this shot:
 
 ${frameDescriptions.join('\n\n')}
 
 Please provide a single, coherent description that captures the main content and any changes or movements shown across these frames.`
-        }
-      ],
-      max_tokens: 100
-    });
+          }
+        ],
+        max_tokens: 100
+      })
+    );
 
     return combinedCompletion.choices[0].message.content.trim();
   } catch (error) {
@@ -330,30 +303,25 @@ async function analyzeShots(videoBuffer, shots) {
     // Extract frames for all shots in a single FFmpeg command
     const shotFrames = await extractFramesFromShots(videoBuffer, shots);
 
-    // Analyze each shot
-    const shotAnalyses = await Promise.all(
-      shots.map(async (shot) => {
-        const frames = shotFrames.get(`${shot.startTime}-${shot.endTime}`) || [];
-        const description = await analyzeShot(frames);
-        return {
-          startTime: shot.startTime,
-          endTime: shot.endTime,
-          description
-        };
-      })
+    // Process shots in batches to avoid rate limits
+    const shotProcessor = async (shot, index) => {
+      console.log(`🎬 Analyzing shot ${index + 1}/${shots.length} (${shot.startTime}s - ${shot.endTime}s)`);
+      const frames = shotFrames.get(`${shot.startTime}-${shot.endTime}`) || [];
+      const description = await analyzeShot(frames);
+      return {
+        startTime: shot.startTime,
+        endTime: shot.endTime,
+        description
+      };
+    };
+
+    // Process shots in small batches with delays
+    const shotAnalyses = await processBatchWithRateLimit(
+      shots,
+      shotProcessor,
+      1, // Process 1 shot at a time to be conservative
+      2000 // 2 second delay between shots
     );
-
-//     const shotAnalyses = [];
-
-// for (const shot of shots) {
-//   const frames = shotFrames.get(`${shot.startTime}-${shot.endTime}`) || [];
-//   const description = await analyzeShot(frames);
-//   shotAnalyses.push({
-//     startTime: shot.startTime,
-//     endTime: shot.endTime,
-//     description
-//   });
-// }
 
     return shotAnalyses;
   } catch (error) {
@@ -372,16 +340,17 @@ async function analyzeShotRelevance(shots, decription) {
     // First, get the main topic from all shot descriptions
     const shotDescriptions = shots.map(shot => shot.description).join('\n');
     
-    const mainTopicCompletion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "You are a video content analyzer. Your task is to determine the main topic or theme of a video based on its description and shots descriptions. Always respond in the exact format specified in the prompt."
-        },
-        {
-          role: "user",
-          content: `${decription ? `Here is the description of the video content:\n${decription}\n\n` : ''}Based on the ${decription ? 'above description and the ' : ''}following visual descriptions from different shots in a video, what is the main topic or theme being discussed or shown? Please provide a concise summary.
+    const mainTopicCompletion = await callWithRetry(() =>
+      openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "You are a video content analyzer. Your task is to determine the main topic or theme of a video based on its description and shots descriptions. Always respond in the exact format specified in the prompt."
+          },
+          {
+            role: "user",
+            content: `${decription ? `Here is the description of the video content:\n${decription}\n\n` : ''}Based on the ${decription ? 'above description and the ' : ''}following visual descriptions from different shots in a video, what is the main topic or theme being discussed or shown? Please provide a concise summary.
 
 Shot Descriptions:
 ${shotDescriptions}
@@ -394,10 +363,11 @@ Language: [Detected language or 'Unknown' if not detectable]
 News Category: [If it is news, specify the category: politics/human rights/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)]
 
 Note: Please maintain this exact format with the labels "Main Topic:", "Summary:", "Language:", and "News Category:" followed by your response.`
-        }
-      ],
-      max_tokens: 300
-    });
+          }
+        ],
+        max_tokens: 300
+      })
+    );
 
     const mainTopicResponse = mainTopicCompletion.choices[0].message.content.trim();
     
@@ -411,10 +381,13 @@ Note: Please maintain this exact format with the labels "Main Topic:", "Summary:
     const summary = summaryMatch ? summaryMatch[1].trim() : '';
     const detectedLanguage = languageMatch ? languageMatch[1].trim() : 'Unknown';
     const newsCategory = newsCategoryMatch ? newsCategoryMatch[1].trim() : '';
-    // Now analyze each shot's relevance to the main topic
-    const relevanceAnalysis = await Promise.all(
-      shots.map(async (shot) => {
-        const relevanceCompletion = await openai.chat.completions.create({
+    
+    // Now analyze each shot's relevance to the main topic using batch processing
+    const relevanceProcessor = async (shot, index) => {
+      console.log(`🔍 Analyzing relevance for shot ${index + 1}/${shots.length}`);
+      
+      const relevanceCompletion = await callWithRetry(() =>
+        openai.chat.completions.create({
           model: "gpt-4",
           messages: [
             {
@@ -433,22 +406,30 @@ Please analyze how relevant this shot is to the main topic. Provide:
             }
           ],
           max_tokens: 150
-        });
+        })
+      );
 
-        const analysis = relevanceCompletion.choices[0].message.content.trim();
-        
-        // Parse the analysis to extract structured data
-        const scoreMatch = analysis.match(/Relevance Score:\s*(\d+)/);
-        const isRelevantMatch = analysis.match(/Is Relevant:\s*(true|false)/i);
+      const analysis = relevanceCompletion.choices[0].message.content.trim();
+      
+      // Parse the analysis to extract structured data
+      const scoreMatch = analysis.match(/Relevance Score:\s*(\d+)/);
+      const isRelevantMatch = analysis.match(/Is Relevant:\s*(true|false)/i);
 
-        return {
-          startTime: shot.startTime,
-          endTime: shot.endTime,
-          description: shot.description,
-          relevanceScore: scoreMatch ? parseInt(scoreMatch[1]) : 0,
-          isRelevant: isRelevantMatch ? isRelevantMatch[1].toLowerCase() === 'true' : false
-        };
-      })
+      return {
+        startTime: shot.startTime,
+        endTime: shot.endTime,
+        description: shot.description,
+        relevanceScore: scoreMatch ? parseInt(scoreMatch[1]) : 0,
+        isRelevant: isRelevantMatch ? isRelevantMatch[1].toLowerCase() === 'true' : false
+      };
+    };
+
+    // Process shot relevance analysis in batches
+    const relevanceAnalysis = await processBatchWithRateLimit(
+      shots,
+      relevanceProcessor,
+      2, // Process 2 shots at a time
+      2500 // 2.5 second delay between batches
     );
 
     return {
@@ -551,15 +532,17 @@ Important: Before providing the array:
 4. Try to maintain narrative coherence in the selection order
 `;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        { role: "system", content: "You are a helpful assistant for video editing." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 100,
-      temperature: 0.2
-    });
+    const completion = await callWithRetry(() =>
+      openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          { role: "system", content: "You are a helpful assistant for video editing." },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 100,
+        temperature: 0.2
+      })
+    );
 
     // Parse the response
     const match = completion.choices[0].message.content.match(/\[.*\]/);
