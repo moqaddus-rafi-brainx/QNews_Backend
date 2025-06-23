@@ -136,7 +136,7 @@ async function generateVoiceOver(summary, contentData, duration) {
   }
 
   console.log('Duration:', duration);
-  const targetWordCount = Math.floor(duration * 2.5);
+  const targetWordCount = Math.floor(duration * 2.3);
   console.log('Duration:', duration, 'Target word count:', targetWordCount);
   
   
