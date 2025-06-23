@@ -9,7 +9,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {number} baseDelay - Base delay in ms between retries
  * @returns {Promise<any>}
  */
-async function callWithRetry(fn, maxRetries = 5, baseDelay = 2000) {
+async function callWithRetry(fn, maxRetries = 5, baseDelay = 1000) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await fn(); // Attempt the API call

@@ -126,81 +126,113 @@ async function extractFramesFromShots(videoBuffer, shots) {
     return new Promise((resolve, reject) => {
       const shotFrames = new Map();
       
-      // Create filter complex string for all shots
-      const filterComplex = shots.map((shot, index) => {
+      // Safety check
+      if (shots.length === 0) {
+        throw new Error("No shots provided for frame extraction.");
+      }
+
+      console.log(`🎬 Extracting frames for ${shots.length} shots...`);
+
+      // Process each shot individually to ensure exact frame count
+      let processedShots = 0;
+      const totalShots = shots.length;
+
+      const processShot = async (shot, shotIndex) => {
         const duration = shot.endTime - shot.startTime;
-        const fps = 4 / duration; // Calculate fps to get exactly 4 frames
-        return `[0:v]trim=start=${shot.startTime}:end=${shot.endTime},setpts=PTS-STARTPTS,fps=${fps}[v${index}]`;
-      }).join(';');
+        const frameTimestamps = [];
+        
+        // Calculate 4 evenly spaced timestamps within the shot
+        for (let i = 0; i < 4; i++) {
+          const timestamp = shot.startTime + (duration * i / 3); // 0%, 33%, 66%, 100%
+          frameTimestamps.push(timestamp);
+        }
 
-      const command = ffmpeg(videoPath)
-        .complexFilter(filterComplex)
-        .outputOptions([
-          '-y', // Force overwrite output files
-          '-f image2', // Force image2 format
-          '-vcodec mjpeg', // Use MJPEG codec
-          '-q:v 2' // Set quality
-        ]);
+        console.log(`📸 Shot ${shotIndex}: Extracting frames at timestamps: ${frameTimestamps.map(t => t.toFixed(2)).join(', ')}s`);
 
-        // Safety check
-if (shots.length === 0) {
-    throw new Error("No shots provided for frame extraction.");
-  }
+        const command = ffmpeg(videoPath)
+          .inputOptions([
+            '-ss', shot.startTime.toString(),
+            '-t', duration.toString()
+          ])
+          .outputOptions([
+            '-y',
+            '-f image2',
+            '-vcodec mjpeg',
+            '-q:v 2',
+            '-vf', `fps=1/${duration/4}` // Extract 4 frames over the duration
+          ])
+          .output(path.join(framesDir, `shot_${shotIndex}_frame_%d.jpg`));
 
-  //console.log(`Extracting 5 frames for each of the ${shots.length} shots`);
+        return new Promise((resolveShot, rejectShot) => {
+          command
+            .on('start', () => {
+              console.log(`🚀 Started extracting frames for shot ${shotIndex}`);
+            })
+            .on('error', (err) => {
+              console.error(`❌ Error extracting frames for shot ${shotIndex}:`, err);
+              rejectShot(err);
+            })
+            .on('end', async () => {
+              try {
+                // Read frame files for this shot
+                const files = await fs.readdir(framesDir);
+                const shotFiles = files.filter(f => f.startsWith(`shot_${shotIndex}_frame_`));
+                console.log(`📁 Shot ${shotIndex}: Found ${shotFiles.length} frames`);
+                
+                const frames = await Promise.all(
+                  shotFiles.map(async (file) => {
+                    const framePath = path.join(framesDir, file);
+                    const frameBuffer = await fs.readFile(framePath);
+                    return frameBuffer.toString('base64');
+                  })
+                );
+                
+                // Ensure we only use exactly 4 frames (take first 4 if more extracted)
+                const limitedFrames = frames.slice(0, 4);
+                if (frames.length > 4) {
+                  console.log(`⚠️ Shot ${shotIndex}: FFmpeg extracted ${frames.length} frames, limiting to 4`);
+                }
+                
+                shotFrames.set(`${shot.startTime}-${shot.endTime}`, limitedFrames);
+                processedShots++;
+                
+                // Clean up shot-specific files
+                await Promise.all(
+                  shotFiles.map(file => fs.unlink(path.join(framesDir, file)))
+                );
+                
+                resolveShot();
+              } catch (error) {
+                rejectShot(error);
+              }
+            })
+            .run();
+        });
+      };
 
-  
-
-      // Add output for each shot
-      shots.forEach((shot, index) => {
-        const outputPath = path.join(framesDir, `shot_${index}_frame_%d.jpg`);
-        command.addOutput(outputPath)
-          .addOutputOptions([`-map [v${index}]`]);
-      });
-
-      command
-        .on('start', (commandLine) => {
-          //console.log('Started FFmpeg with command:', commandLine);
-        })
-        .on('error', (err) => {
-          console.error('Error during FFmpeg processing:', err);
-          cleanup();
-          reject(err);
-        })
-        .on('end', async () => {
-          try {
-            // Read all frame files
-            const files = await fs.readdir(framesDir);
-            
-            // Group frames by shot
-            for (let i = 0; i < shots.length; i++) {
-              const shotFiles = files.filter(f => f.startsWith(`shot_${i}_frame_`));
-              const frames = await Promise.all(
-                shotFiles.map(async (file) => {
-                  const framePath = path.join(framesDir, file);
-                  const frameBuffer = await fs.readFile(framePath);
-                  return frameBuffer.toString('base64');
-                })
-              );
-              shotFrames.set(`${shots[i].startTime}-${shots[i].endTime}`, frames);
-            }
-
-            // Cleanup
-            await cleanup();
-            resolve(shotFrames);
-          } catch (error) {
-            await cleanup();
-            reject(error);
+      // Process all shots sequentially to avoid conflicts
+      const processAllShots = async () => {
+        try {
+          for (let i = 0; i < shots.length; i++) {
+            await processShot(shots[i], i);
           }
-        })
-        .run();
+          
+          // Cleanup video file
+          await fs.unlink(videoPath).catch(() => {});
+          await fs.rmdir(framesDir).catch(() => {});
+          
+          resolve(shotFrames);
+        } catch (error) {
+          await cleanup();
+          reject(error);
+        }
+      };
+
+      processAllShots();
 
       async function cleanup() {
         try {
-          // Remove video file
           await fs.unlink(videoPath).catch(() => {});
-          
-          // Remove frames directory and its contents
           const files = await fs.readdir(framesDir);
           await Promise.all(
             files.map(file => fs.unlink(path.join(framesDir, file)))
@@ -228,9 +260,11 @@ async function analyzeShot(frames) {
       return "No frames could be extracted from this shot.";
     }
     
+    console.log(`📸 Analyzing shot with ${frames.length} frames`);
+    
     // Process frames in batches to avoid rate limits
     const frameProcessor = async (frame, index) => {
-      console.log(`📸 Analyzing frame #${index + 1}`);
+      console.log(`📸 Analyzing frame #${index + 1}/${frames.length}`);
       
       const completion = await callWithRetry(() =>
         openai.chat.completions.create({
