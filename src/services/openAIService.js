@@ -1,9 +1,5 @@
-// npm install openai dotenv
+
 const { OpenAI } = require('openai');
-const ffmpeg = require('fluent-ffmpeg');
-const fs = require('fs');
-const path = require('path');
-const { Readable } = require('stream');
 require('dotenv').config();
 
 const {selectMostRelevantShotsWithin30sGreedy} = require('./visualAnalysisService');
@@ -13,200 +9,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/**
- * Extracts frames from video buffer for a specific timestamp
- * @param {Buffer} videoBuffer - Video file buffer
- * @param {number} startTime - Start time in seconds
- * @param {number} endTime - End time in seconds
- * @param {number} frameRate - Number of frames to extract per second
- * @returns {Promise<Array>} Array of frame buffers
- */
-async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate = 1) {
-  return new Promise((resolve, reject) => {
-    const frames = [];
-    const tempDir = '/tmp';
-    
-    const outputPattern = path.join(tempDir, `frame_${startTime}_%d.jpg`);
-
-    // Create a temporary file to store the video buffer
-    const tempVideoPath = path.join(tempDir, `temp_video_${Date.now()}.mp4`);
-    fs.writeFileSync(tempVideoPath, videoBuffer);
-
-    ffmpeg(tempVideoPath)
-      .setStartTime(startTime)
-      .setDuration(endTime - startTime)
-      .fps(frameRate)
-      .on('end', async () => {
-        try {
-          // Read all frames from temp directory
-          const files = fs.readdirSync(tempDir)
-            .filter(file => file.startsWith(`frame_${startTime}_`))
-            .sort((a, b) => {
-              const numA = parseInt(a.split('_').pop());
-              const numB = parseInt(b.split('_').pop());
-              return numA - numB;
-            });
-
-          // Read each frame file
-          for (const file of files) {
-            const framePath = path.join(tempDir, file);
-            const frameBuffer = fs.readFileSync(framePath);
-            frames.push(frameBuffer);
-            // Clean up the file
-            fs.unlinkSync(framePath);
-          }
-
-          // Clean up the temporary video file
-          fs.unlinkSync(tempVideoPath);
-
-          resolve(frames);
-        } catch (error) {
-          // Clean up the temporary video file in case of error
-          if (fs.existsSync(tempVideoPath)) {
-            fs.unlinkSync(tempVideoPath);
-          }
-          reject(error);
-        }
-      })
-      .on('error', (err) => {
-        // Clean up the temporary video file in case of error
-        if (fs.existsSync(tempVideoPath)) {
-          fs.unlinkSync(tempVideoPath);
-        }
-        reject(err);
-      })
-      .save(outputPattern);
-  });
-}
-
-/**
- * Analyzes transcript and visual metadata using OpenAI
- * @param {Object} data - Includes transcript, labels, shots
- * @returns {Promise<Object>} Analysis result
- */
-
-//Not using this one.
-// async function analyzeWithOpenAI(data) {
-//   const { speechTranscripts, labels, shots } = data;
-
-//   const combinedTranscript = speechTranscripts
-//     .map(t => t.transcript)
-//     .filter(Boolean)
-//     .join(' ');
-
-//   const labelDescriptions = labels.map(label => {
-//     return `Label: ${label.description}, Timestamps: ${label.segments.map(s => `${s.startTime}s-${s.endTime}s`).join(', ')}`;
-//   }).join('\n');
-
-//   const shotTimestamps = shots.map(s => `${s.startTime}s - ${s.endTime}s`).join(', ');
-
-//   const prompt = `
-// You are an expert multimedia content analyst.
-
-// Here is a video transcript:
-// "${combinedTranscript}"
-
-// Visual labels with timestamps:
-// ${labelDescriptions}
-
-// Shot timestamps (scene changes):
-// ${shotTimestamps}
-
-// Based on the above data, answer these questions:
-
-// 1. Is this video news-related? (yes or no)
-// 2. What is the general news category? Choose from: politics, sports, entertainment, social, natural disaster, economy, environment, other
-// 3. Provide a 2-3 line summary of the news.
-// 4. Provide the timestamp(s) of the segment where the main news is discussed (e.g., ["12s-55s", "1:00-1:30"]).
-// 5. Based on the transcript and scene changes, does the voice seem like a voiceover (narration only), or is the speaker likely visible in the video?
-
-// Return result as JSON with this format:
-
-// {
-//   "is_news_related": true,
-//   "news_category": "Politics",
-//   "summary": "The speaker discusses recent government reforms and opposition reactions.",
-//   "relevant_timestamps": ["10s-45s"],
-//   "voice_type": "voiceover" // or "speaker visible"
-// }
-// `;
-
-//   const response = await openai.createChatCompletion({
-//     model: "gpt-4",
-//     messages: [{ role: "user", content: prompt }],
-//     temperature: 0.4
-//   });
-
-//   const text = response.data.choices[0].message.content;
-
-//   try {
-//     const jsonStart = text.indexOf('{');
-//     return JSON.parse(text.slice(jsonStart));
-//   } catch (e) {
-//     console.error("Failed to parse OpenAI response:", text);
-//     throw new Error("Invalid JSON format from OpenAI");
-//   }
-// }
-
-// /**
-//  * Analyzes individual transcripts to determine if they are news-related and their category
-//  * @param {Array} transcripts - Array of transcript objects with timestamps
-//  * @returns {Promise<Array>} Array of analysis results for each transcript
-//  * Not using this one.
-//  */
-// async function analyzeTranscriptsIndividually(transcripts) {
-//   const results = [];
-
-//   for (const transcript of transcripts) {
-//     const prompt = `
-// You are an expert news content analyzer.
-
-// Here is a transcript segment:
-// "${transcript.transcript}"
-
-// Based on this transcript, answer these questions:
-
-// 1. Is this a News? (yes or no)
-// 2. What is the news category? Choose from: politics, sports, entertainment, social, natural disaster, economy, environment, war, crime, celebration, other
-
-// Return result as JSON with this format:
-// {
-//   "is_news": true/false,
-//   "category": "Politics",
-//   "timestamp": "${transcript.startTime}s-${transcript.endTime}s"
-// }
-// `;
-
-//     const response = await openai.chat.completions.create({
-//       model: "gpt-4",
-//       messages: [{ role: "user", content: prompt }],
-//       temperature: 0.4
-//     });
-
-//     const text = response.choices[0].message.content;
-
-//     try {
-//       const jsonStart = text.indexOf('{');
-//       const result = JSON.parse(text.slice(jsonStart));
-//       results.push({
-//         ...result,
-//         transcript: transcript.transcript,
-//         languageCode: transcript.languageCode
-//       });
-//     } catch (e) {
-//       console.error("Failed to parse OpenAI response for transcript:", text);
-//       results.push({
-//         is_news: false,
-//         category: "unknown",
-//         transcript: transcript.transcript,
-//         timestamp: `${transcript.startTime}s-${transcript.endTime}s`,
-//         error: "Failed to parse response"
-//       });
-//     }
-//   }
-
-//   return results;
-// }
 
 /**
  * Analyzes the entire content to determine the main topic, news category, and relevance
@@ -221,7 +23,7 @@ You are an expert content analyzer.
 
 Your task is to analyze the transcript and provide insights about the video content. However, please keep in mind:
 - The transcript may be very short(like few random words), incomplete, or contain minimal/no useful information.
-- IMPORTANT: The "is_sufficient" field should be determined ONLY by the transcript content, NOT by the description. A transcript is considered insufficient if it contains few words, and lacks meaningful information.
+- IMPORTANT: The "is_sufficient" field should be determined ONLY by the given transcript,${description ? `NOT by the description` : ""}. A transcript is considered insufficient if it contains few words, and lacks meaningful information.
 
 Here is the complete transcript of a video:
 "${combinedTranscript}"
@@ -239,7 +41,7 @@ Return result as JSON with this format:
 {
   "main_topic": "Brief description of the main topic",
   "summary": "A short news article of 2-3 sentences",
-  "category":"News category from mentioned categories",
+  "category":"News category",
   "is_ai_generated": true/false,
   "is_sufficient": true/false
   }
@@ -406,7 +208,7 @@ Segment: "${transcript.transcript}"
 Assess relevance and importance. Return JSON:
 {
   "is_relevant": true/false,
-  "relevanceScore": 0-100
+  "relevanceScore": 0-100(how relevant and important is this segment to the main topic)
 }
 `;
 
@@ -423,36 +225,10 @@ Assess relevance and importance. Return JSON:
       const result = JSON.parse(text.slice(jsonStart));
       
       if (result.is_relevant) {
-        try {
-          // Extract frames for this transcript's timestamp
-          const frames = await extractFramesForTimestamp(
-            videoBuffer,
-            parseFloat(transcript.startTime),
-            parseFloat(transcript.endTime)
-          );
-          
-          // Analyze voice type with frames
-          //const voiceAnalysis = await analyzeVoiceTypeWithFrames(transcript, frames);
-          //console.log("voiceAnalysis:", voiceAnalysis);
-          
-          relevantGroup.push({
-            ...transcript,
-            relevanceScore: result.relevanceScore,
-            //visual_analysis: voiceAnalysis
-          });
-        } catch (error) {
-          console.error(`Error processing frames for transcript at ${transcript.startTime}-${transcript.endTime}:`, error);
-          relevantGroup.push({
-            ...transcript,
-            relevanceScore: result.relevanceScore,
-            visual_analysis: {
-              voice_type: "unknown",
-              confidence: "low",
-              explanation: "Error processing frames",
-              visual_analysis: "Error processing visual content"
-            }
-          });
-        }
+        relevantGroup.push({
+          ...transcript,
+          relevanceScore: result.relevanceScore,
+        });
       } else {
         irrelevantGroup.push({
           ...transcript,
@@ -469,11 +245,10 @@ Assess relevance and importance. Return JSON:
   }
 
   // Merge close transcripts in relevant group
-  console.log('Relevant Group:',relevantGroup);
+
   const {selectedShots,totalDuration}= selectMostRelevantShotsWithin30sGreedy(relevantGroup);
-  console.log('Most Relevant Shots:',selectedShots);
+  
   const mergedGroups = mergeCloseTranscripts(selectedShots);
- // const adjustedTranscripts = adjustTranscriptTimestampsWithShots(relevantGroup, shots);
   
   // Create merged and unmerged content sections
   const mergedContent = mergedGroups.map(group => ({
@@ -495,10 +270,9 @@ Assess relevance and importance. Return JSON:
     summary: mainTopicAnalysis.summary,
     category: mainTopicAnalysis.category,
     is_ai_generated: mainTopicAnalysis.is_ai_generated,
-    //adjusted_transcripts: adjustedTranscripts,
     relevant_content: {
        mergedContent,
-      //unmerged_segments: unmergedContent
+
     },
     irrelevant_content: {
       transcripts: irrelevantGroup,
@@ -510,38 +284,6 @@ Assess relevance and importance. Return JSON:
 }
 
 
-
-// /**
-//  * Adjusts transcript timestamps to align with shot boundaries
-//  * @param {Array} transcripts - Array of transcript objects with startTime and endTime
-//  * @param {Array} shots - Array of shot objects with startTime and endTime
-//  * @returns {Array} Array of transcripts with adjusted timestamps
-//  */
-// function adjustTranscriptTimestampsWithShots(transcripts, shots) {
-//   return transcripts.map(transcript => {
-//     const transcriptStart = parseFloat(transcript.startTime);
-//     const transcriptEnd = parseFloat(transcript.endTime);
-    
-//     // Find the shot that contains the transcript start time
-//     const startShot = shots.find(shot => 
-//       parseFloat(shot.startTime) <= transcriptStart && 
-//       parseFloat(shot.endTime) >= transcriptStart
-//     );
-    
-//     // Find the shot that contains the transcript end time
-//     const endShot = shots.find(shot => 
-//       parseFloat(shot.startTime) <= transcriptEnd && 
-//       parseFloat(shot.endTime) >= transcriptEnd
-//     );
-    
-//     // Create a new transcript object with adjusted timestamps
-//     return {
-//       ...transcript,
-//       startTime: startShot ? startShot.startTime.toString() : transcript.startTime,
-//       endTime: endShot ? endShot.endTime.toString() : transcript.endTime
-//     };
-//   });
-// }
 
 module.exports = {
   analyzeMainTopic,

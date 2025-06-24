@@ -6,7 +6,6 @@ defaultClient.authentications['DeveloperKey'].apiKey = process.env.SHOTSTACK_API
 
 const editApi = new Shotstack.EditApi();
 
-// ... existing code ...
 
 /**
  * Wait for render to complete by polling the status using direct API calls
@@ -30,10 +29,7 @@ async function waitForRenderCompletion(renderId, maxWaitTime = 5 * 60 * 1000, po
       
       const status = response.data.response.status;
       
-      console.log(`🔄 Render ${renderId} status: ${status}`);
-      
       if (status === 'done') {
-        console.log(`✅ Render ${renderId} completed successfully!`);
         return response.data.response;
       } else if (status === 'failed') {
         throw new Error(`Render ${renderId} failed with status: ${status}`);
@@ -46,7 +42,6 @@ async function waitForRenderCompletion(renderId, maxWaitTime = 5 * 60 * 1000, po
       
     } catch (error) {
       if (error.response?.status === 404) {
-        console.log(`⏳ Render ${renderId} not found yet, waiting...`);
         await new Promise(resolve => setTimeout(resolve, pollInterval));
         continue;
       }
@@ -101,9 +96,7 @@ async function removeClipFromVideo(videoSrc, segmentsToKeep, totalDuration) {
     }
 
     if (segment.endTime > totalDuration) {
-      //throw new Error(`Invalid segment at index ${i}: endTime cannot be greater than total duration`);
       segment.endTime=totalDuration;
-      console.log('Adjusted segment at index',i,': endTime cannot be greater than total duration');
     }
 
     // Check for overlapping segments
@@ -131,8 +124,6 @@ async function removeClipFromVideo(videoSrc, segmentsToKeep, totalDuration) {
     outputTime += clipLength;
   }
 
-  //console.log('Clips:', JSON.stringify(clips, null, 2));
-
   const edit = {
     timeline: {
       tracks: [
@@ -147,16 +138,12 @@ async function removeClipFromVideo(videoSrc, segmentsToKeep, totalDuration) {
     }
   };
 
-  //console.log('Edit object:', JSON.stringify(edit, null, 2));
-
   try {
     const response = await editApi.postRender(edit);
     const renderId = response.response.id;
-    console.log('✅ Video trimming render started with ID:', renderId);
     
     // Wait for render to complete
     const completedRender = await waitForRenderCompletion(renderId);
-    console.log('✅ Video trimming completed! URL:', completedRender.url);
     
     return completedRender;
   } catch (error) {
@@ -238,11 +225,9 @@ async function overlayAudioOnVideo(videoSrc, audioSrc, videoDuration, audioStart
   try {
     const response = await editApi.postRender(edit);
     const renderId = response.response.id;
-    console.log('✅ Audio overlay render started with ID:', renderId);
     
     // Wait for render to complete
     const completedRender = await waitForRenderCompletion(renderId);
-    console.log('✅ Audio overlay completed! URL:', completedRender.url);
     
     return completedRender;
   } catch (error) {

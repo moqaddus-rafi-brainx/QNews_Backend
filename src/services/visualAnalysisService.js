@@ -130,7 +130,7 @@ async function extractFramesFromShots(videoBuffer, shots) {
         throw new Error("No shots provided for frame extraction.");
       }
 
-      console.log(`🎬 Extracting frames for ${shots.length} shots...`);
+     
 
       // Process each shot individually to ensure exact frame count
       let processedShots = 0;
@@ -347,7 +347,7 @@ async function analyzeShot(frames) {
 
 ${frameDescriptions.join('\n\n')}
 
-Please provide a single, coherent description that captures the main content and any changes or movements shown across these frames.`
+Please provide a single, coherent description that captures the main content.`
           }
         ],
         max_tokens: 100
@@ -415,11 +415,11 @@ async function analyzeShotRelevance(shots, decription) {
         messages: [
           {
             role: "system",
-            content: "You are a video content analyzer. Your task is to determine the main topic or theme of a video based on its description and shots descriptions. Always respond in the exact format specified in the prompt."
+            content: "You are a video content analyzer. Your task is to determine the main topic or theme of a video based on its description and shots descriptions."
           },
           {
             role: "user",
-            content: `${decription ? `Here is the description of the video content:\n${decription}\n\n` : ''}Based on the ${decription ? 'above description and the ' : ''}following visual descriptions from different shots in a video, what is the main topic or theme being discussed or shown? Please provide a concise summary.
+            content: `${decription ? `Here is the description of the video content:\n${decription}\n\n` : ''}Based on the ${decription ? 'above description and the ' : ''}following visual descriptions from different shots in a video, what is the main topic or theme being discussed or shown?.
 
 Shot Descriptions:
 ${shotDescriptions}
@@ -429,9 +429,9 @@ Please provide your response in the following exact format:
 Main Topic: [${decription ? 'Extract main topic primarily from the description, supported by visual evidence from shots' : 'Extract main topic from visual descriptions'}]
 Summary: [${decription ? 'Combine the description context with visual evidence to create a comprehensive news article' : 'Comprehensive news article based on visual descriptions'}]
 Language: [Detected language or 'Unknown' if not detectable]
-News Category: [If it is news, specify the category: politics/human rights/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)]
+News Category: [Specify the news category: politics/human rights/sports/entertainment/social/natural disaster/economy/environment/war/crime/celebration/(etc...)]
 
-Note: Please maintain this exact format with the labels "Main Topic:", "Summary:", "Language:", and "News Category:" followed by your response.`
+Note: Please maintain this exact format of response with the labels "Main Topic:", "Summary:", "Language:", and "News Category:" followed by your response.`
           }
         ],
         max_tokens: 300
@@ -461,7 +461,7 @@ Note: Please maintain this exact format with the labels "Main Topic:", "Summary:
           messages: [
             {
               role: "system",
-              content: "You are a video content analyzer. Your task is to determine can the shot description be relevant or related to the main topic and summary of the video or the previous relevant shots."
+              content: "You are a video content analyzer. Your task is to determine can the shot description be relevant or related to the main topic, description and  summary of the video."
             },
             {
               role: "user",
@@ -469,9 +469,9 @@ Note: Please maintain this exact format with the labels "Main Topic:", "Summary:
 
 Shot Description: ${shot.description}
 
-Please analyze how relevant this shot is to the main topic. Provide:
-1. Relevance Score (0-100): How relevant and important is this shot to the main topic or summary of the video?
-3. Is Relevant (true/false): Based on the score, is this shot relevant enough to keep?`
+Assess relevance and importance of this shot, Provide:
+1. Is Relevant: true/false
+2. Relevance Score : 0-100 (How relevant and important is this shot to the main topic or summary of the video?)`
             }
           ],
           max_tokens: 150
@@ -567,102 +567,6 @@ function separateAndMergeRelevantShots(selectShots,allShots) {
   };
 }
 
-/**
- * Selects the most relevant shots (up to 30s total) using OpenAI
- * @param {Array} shots - Array of shot objects: {startTime, endTime, description, relevanceScore}
- * @returns {Promise<Array>} - Array of selected shots
- */
-async function selectMostRelevantShotsWithin30s(shots) {
-  try {
-    // Filter only relevant shots
-    const relevantInputShots = shots.filter(shot => shot.isRelevant);
-    console.log('Relevant Input Shots:',relevantInputShots);
-    if (relevantInputShots.length === 0) {
-      return [];
-    }
-    // Prepare a summary of all relevant shots for the prompt
-    const shotList = relevantInputShots.map((shot, idx) => {
-      const duration = (shot.endTime - shot.startTime).toFixed(2);
-      return `Shot ${idx + 1}: [${shot.startTime}s - ${shot.endTime}s]\nDescription: ${shot.description}\nRelevance Score: ${shot.relevanceScore}`;
-    }).join('\n\n');
-
-    const prompt = `
-You are a video editor. You are given a list of video shots, each with a start time, end time, duration, description, and relevance score (0-100). Your task is to select the combination of shots that are the most relevant (highest total relevance score), but the total duration of all selected shots must be near 30 seconds. Prefer shots with higher relevance scores and more informative descriptions. Return the selected shots as a list of their indices (starting from 1), in the order they should appear.
-
-Shots:
-${shotList}
-
-Please respond with a JSON array of the selected shot indices, in order. Example: [2, 4, 5]
-
-Important: Before providing the array:
-1. Calculate the total duration of your selected shots
-2. Ensure it should be near 30 seconds
-3. Prioritize shots with higher relevance scores
-4. Try to maintain narrative coherence in the selection order
-`;
-
-    const completion = await callWithRetry(() =>
-      openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [
-          { role: "system", content: "You are a helpful assistant for video editing." },
-          { role: "user", content: prompt }
-        ],
-        max_tokens: 100,
-        temperature: 0.2
-      })
-    );
-
-    // Parse the response
-    const match = completion.choices[0].message.content.match(/\[.*\]/);
-    console.log('Completion:',completion.choices[0].message.content);
-    console.log('Match:',match);
-    let selectedIndices = [];
-    if (match) {
-      try {
-        selectedIndices = JSON.parse(match[0]);
-      } catch (e) {
-        console.error("Failed to parse OpenAI response:", completion.choices[0].message.content);
-        return [];
-      }
-    }
-
-    // Get the selected shots and verify total duration
-    const selectedShots = selectedIndices.map(idx => relevantInputShots[idx - 1]).filter(Boolean);
-    const totalDuration = selectedShots.reduce((sum, shot) => 
-      sum + (shot.endTime - shot.startTime), 0
-    );
-
-    if (totalDuration > 32) {
-      console.warn(`Selected shots exceed 30s (${totalDuration.toFixed(2)}s), adjusting selection...`);
-      // If we exceed 30s, take shots until we hit the limit
-      const adjustedShots = [];
-      let currentDuration = 0;
-      for (const shot of selectedShots) {
-        const shotDuration = shot.endTime - shot.startTime;
-        if (currentDuration + shotDuration <= 30) {
-          adjustedShots.push(shot);
-          currentDuration += shotDuration;
-        } else {
-          break;
-        }
-      }
-      return adjustedShots;
-    }
-
-    if(totalDuration>60){
-      const lastShot = selectedShots[selectedShots.length - 1];
-      const excessDuration = totalDuration - 60;
-      lastShot.endTime = lastShot.endTime - excessDuration;
-      totalDuration = 60; // Recalculate totalDuration after modification
-    }
-
-    return selectedShots;
-  } catch (error) {
-    console.error('Error in selecting relevant shots:', error);
-    throw new Error('Failed to select relevant shots');
-  }
-}
 
 /**
  * Selects the most relevant shots (up to 30s total) using a greedy algorithm.
@@ -714,9 +618,6 @@ function selectMostRelevantShotsWithin30sGreedy(shots) {
     totalDuration = 60; // Recalculate totalDuration after modification
   }
 
-  console.log('Selected Shots:',selectedShots);
-  console.log('Total Duration:',totalDuration);
-
   return { selectedShots, totalDuration };
 }
 
@@ -728,6 +629,5 @@ module.exports = {
   extractFramesFromShots,
   analyzeShotRelevance,
   separateAndMergeRelevantShots,
-  selectMostRelevantShotsWithin30s,
   selectMostRelevantShotsWithin30sGreedy
 }; 

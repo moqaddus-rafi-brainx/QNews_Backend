@@ -44,13 +44,13 @@ async function callWithRetry(fn, maxRetries = 5, baseDelay = 500) {
 
       if (!isRetryable || attempt === maxRetries) {
         console.error(`❌ Final attempt failed (${attempt}/${maxRetries}):`, error.message);
-        throw error; // Rethrow if not retryable or retries exhausted
+        throw error; 
       }
 
       // Calculate exponential backoff with jitter
       const exponentialDelay = baseDelay * Math.pow(2, attempt - 1);
-      const jitter = Math.random() * 0.1 * exponentialDelay; // 10% jitter
-      const wait = Math.min(exponentialDelay + jitter, 30000); // Cap at 30 seconds instead of 60
+      const jitter = Math.random() * 0.1 * exponentialDelay; 
+      const wait = Math.min(exponentialDelay + jitter, 30000);
 
       console.warn(`🔁 Rate limit/quota hit (attempt ${attempt}/${maxRetries}). Retrying in ${(wait/1000).toFixed(1)}s`);
       console.warn(`Error details: ${error.message}`);
@@ -73,7 +73,6 @@ async function processBatchWithRateLimit(items, processor, batchSize = 2, delayB
   
   for (let i = 0; i < items.length; i += batchSize) {
     const batch = items.slice(i, i + batchSize);
-    console.log(`📦 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(items.length/batchSize)} (${batch.length} items)`);
     
     try {
       const batchResults = await Promise.all(
@@ -86,7 +85,6 @@ async function processBatchWithRateLimit(items, processor, batchSize = 2, delayB
       
       // Add delay between batches to avoid rate limits
       if (i + batchSize < items.length) {
-        console.log(`⏳ Waiting ${delayBetweenBatches/1000}s before next batch...`);
         await sleep(delayBetweenBatches);
       }
     } catch (error) {

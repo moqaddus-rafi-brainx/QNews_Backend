@@ -1,4 +1,3 @@
-const { VideoIntelligenceServiceClient } = require('@google-cloud/video-intelligence');
 const path = require('path');
 const multer = require('multer');
 const { LANGUAGE_NAMES } = require('../constants/languages');
@@ -7,17 +6,9 @@ const { groupRelatedTranscripts,analyzeMainTopic } = require('../services/openAI
 const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots,selectMostRelevantShotsWithin30sGreedy} = require('../services/visualAnalysisService');
 const { uploadVideoToCloudinary } = require('../services/cloudinaryUpload');
 const { removeClipFromVideo,overlayAudioOnVideo } = require('../services/videoTrimmingService');
-const { annotateVideoWithGoogle } = require('../services/googleService');
+const { annotateVideoWithGoogle, processVideoAnnotation } = require('../services/googleService');
 const { generateVoiceOver, convertTextToSpeech } = require('../services/voiceOverGenerationService');
 require('dotenv').config();
-
-// Setup Google Cloud client with environment variables
-const client = new VideoIntelligenceServiceClient({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-  }
-});
 
 // Configure multer for in-memory storage
 const upload = multer({ 
@@ -28,199 +19,79 @@ const upload = multer({
 });
 
 /**
- * Analyzes a video file and returns comprehensive analysis results
- * @param {Buffer} fileBuffer - The video file buffer
- * @returns {Promise<Object>} Analysis results
+ * Handles the complete video upload, analysis, and processing workflow
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
  */
-async function analyzeVideo(fileBuffer,description) {
+async function summarizeVideo(req, res) {
+ 
   try {
-    // Analyze audio first
+    if (!req.file) {
+      return res.status(400).json({ error: 'No video file uploaded' });
+    }
+
+    const description = req.body.summary || null;
+    const fileBuffer = req.file.buffer;
+
+    // Step 1: Analyze audio first
     const audioAnalysis = await extractAudioAndAnalyze(fileBuffer);
-    console.log('Audio Analysis:', audioAnalysis);
-
-    // Use the new Google Service for video annotation
-    const operationResult = await annotateVideoWithGoogle(fileBuffer, audioAnalysis.detectedLanguage);
-    let annotationResults;
-    let segmentLabelAnnotations;
-    let shotAnnotations;
-    //console.log('Operation Result:',operationResult);
-    // Safely check if speechTranscriptions exists and is not empty
-    const hasTranscriptions0 = operationResult.annotationResults[0]?.speechTranscriptions?.length > 0;
-    const hasTranscriptions1 = operationResult.annotationResults[1]?.speechTranscriptions?.length > 0;
-
-    if(hasTranscriptions0) {
-      annotationResults = operationResult.annotationResults[0];
-      segmentLabelAnnotations = operationResult.annotationResults[1]?.segmentLabelAnnotations || [];
-      shotAnnotations = operationResult.annotationResults[1]?.shotAnnotations || [];
-      //console.log('Shot Annotations:',shotAnnotations);
-    }
-    else if(hasTranscriptions1) {
-      annotationResults = operationResult.annotationResults[1];
-      segmentLabelAnnotations = operationResult.annotationResults[0]?.segmentLabelAnnotations || [];
-      shotAnnotations = operationResult.annotationResults[0]?.shotAnnotations || [];
-      
-      //console.log('Shot Annotations:',shotAnnotations);
-    }
-    else {
-      // Handle case where no transcriptions are found
-      annotationResults = { speechTranscriptions: [] };
-      segmentLabelAnnotations =
-  operationResult.annotationResults[0]?.segmentLabelAnnotations?.length
-    ? operationResult.annotationResults[0].segmentLabelAnnotations
-    : operationResult.annotationResults[1]?.segmentLabelAnnotations || [];
-
-  shotAnnotations =
-  operationResult.annotationResults[0]?.shotAnnotations?.length
-    ? operationResult.annotationResults[0].shotAnnotations
-    : operationResult.annotationResults[1]?.shotAnnotations || [];
-      
-    }
-
-    const speechTranscripts = annotationResults.speechTranscriptions.map(t => {
-      return t.alternatives[0] && {
-        transcript: t.alternatives[0].transcript,
-        confidence: t.alternatives[0].confidence,
-        languageCode: t.languageCode || 'unknown',
-        words: t.alternatives[0].words.map(w => ({
-          word: w.word,
-          startTime: parseFloat(w.startTime.seconds || 0) + parseFloat(w.startTime.nanos) * 1e-9,
-          endTime: parseFloat(w.endTime.seconds || 0) + parseFloat(w.endTime.nanos) * 1e-9
-        }))
-      };
-    }).filter(Boolean);
-
-    const labels = (segmentLabelAnnotations || []).map(label => ({
-      description: label.entity.description,
-      categories: (label.categoryEntities || []).map(cat => cat.description),
-      segments: label.segments.map(seg => ({
-        startTime: parseFloat(seg.segment.startTimeOffset.seconds || 0) + parseFloat(seg.segment.startTimeOffset.nanos) * 1e-9,
-        endTime: parseFloat(seg.segment.endTimeOffset.seconds || 0) + parseFloat(seg.segment.endTimeOffset.nanos) * 1e-9
-      }))
-    }));
-
     
 
-    const shots = (shotAnnotations || []).map(shot => ({
-      startTime: parseFloat(shot.startTimeOffset.seconds || 0) + parseFloat(shot.startTimeOffset.nanos) * 1e-9,
-      endTime: parseFloat(shot.endTimeOffset.seconds || 0) + parseFloat(shot.endTimeOffset.nanos) * 1e-9
-    }));
+    // Step 2: Process video annotation using the Google service
+    const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer, audioAnalysis.detectedLanguage);
 
-    let mainTopicUsingLabels = null;
-    let shotAnalyses = null;
-    let shotRelevance = null;
-    let mergedShots = null;
+    // Step 3: Analyze main topic using transcripts
+    const mainTopicUsingTranscripts = await analyzeMainTopic(speechTranscripts, description);
+
     let language = null;
     let mainTopic = null;
     let summary = null;
     let relevantContent = null;
     let irrelevantContent = null;
-    let isNews = null;
     let category = null;
     let audioDuration = null;
-    const mainTopicUsingTranscripts = await analyzeMainTopic(speechTranscripts,description);
 
-    //Analyze video labels using OpenAI
-        //mainTopicUsingLabels = await analyzeVideoLabels(labels);
-        // Analyze each shot using OpenAI Vision
-        //console.log('Analyzing shots:',shots);
-       // shotAnalyses = await analyzeShots(fileBuffer, shots);
-       // shotRelevance= await analyzeShotRelevance(shotAnalyses);
-
+    // Step 4: Process based on transcript sufficiency
+    if (mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic" || mainTopicUsingTranscripts.is_sufficient === false) {
+      
       // Analyze video labels using OpenAI
-     //    mainTopicUsingLabels = await analyzeVideoLabels(labels);
-        //  // Analyze each shot using OpenAI Vision
-        //  shotAnalyses = await analyzeShots(fileBuffer, shots);
-        //  shotRelevance= await analyzeShotRelevance(shotAnalyses);
-        //  mergedShots=separateAndMergeRelevantShots(shotRelevance);
-
-     if (mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic" || mainTopicUsingTranscripts.is_sufficient === false)
-     {
-        console.log("mainTopicUsingTranscripts.is_news",mainTopicUsingTranscripts);
-       // Analyze video labels using OpenAI
-         mainTopicUsingLabels = await analyzeVideoLabels(labels);
-         // Analyze each shot using OpenAI Vision
-         shotAnalyses = await analyzeShots(fileBuffer, shots);
-         shotRelevance= await analyzeShotRelevance(shotAnalyses,description);
-        const {selectedShots,totalDuration}= await selectMostRelevantShotsWithin30sGreedy(shotRelevance.shots);
-        // console.log('Most Relevant Shots:',selectedShots);
-        audioDuration=totalDuration;
-         language=shotRelevance.detectedLanguage;
-         mainTopic=shotRelevance.mainTopic;
-         summary=shotRelevance.summary;
-         category=shotRelevance.newsCategory;
-        //  console.log('Category:',category);
-        //  console.log('Is News:',isNews);
-        //  console.log('Shot Relevance:',shotRelevance);
-         
-         mergedShots=separateAndMergeRelevantShots(selectedShots,shotRelevance.shots);
-         //mergedShots=separateAndMergeRelevantShots(shotRelevance.shots);
-         relevantContent=mergedShots.relevantShots;
-        //  const voiceOver=await generateVoiceOver(summary,relevantContent,totalDuration); 
-        //  console.log('Voice Over:',voiceOver);
-        //  convertTextToSpeech(voiceOver,language);
-         irrelevantContent=mergedShots.irrelevantShots;
-     }
-     else
-     {
-      console.log("mainTopicUsingTranscripts.is_news",mainTopicUsingTranscripts);
+      const mainTopicUsingLabels = await analyzeVideoLabels(labels);
+      
+      // Analyze each shot using OpenAI Vision
+      const shotAnalyses = await analyzeShots(fileBuffer, shots);
+      const shotRelevance = await analyzeShotRelevance(shotAnalyses, description);
+      const { selectedShots, totalDuration } = await selectMostRelevantShotsWithin30sGreedy(shotRelevance.shots);
+      
+      audioDuration = totalDuration;
+      language = shotRelevance.detectedLanguage;
+      mainTopic = shotRelevance.mainTopic;
+      summary = shotRelevance.summary;
+      category = shotRelevance.newsCategory;
+      
+      const mergedShots = separateAndMergeRelevantShots(selectedShots, shotRelevance.shots);
+      relevantContent = mergedShots.relevantShots;
+      irrelevantContent = mergedShots.irrelevantShots;
+    } else {
+      
       const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
-      const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer, shots,mainTopicUsingTranscripts);
-      console.log('Grouped Transcripts:', groupedTranscripts);
-      mainTopic=groupedTranscripts.main_topic;
-      summary=groupedTranscripts.summary;
-      category=groupedTranscripts.category;
-      audioDuration=groupedTranscripts.totalDuration;
-      language=LANGUAGE_NAMES[(speechTranscripts[0]?.languageCode || '').toLowerCase()] || 'Unknown';
-      console.log('Language:',language);
-      relevantContent=groupedTranscripts.relevant_content.mergedContent;
-
-      irrelevantContent=groupedTranscripts.irrelevant_content;
-
-      
-     }
-     //isNews=true;
+      const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer, shots, mainTopicUsingTranscripts);
     
-
-   
-
-    
-    return {
       
-      language,
-      mainTopic,
-      summary,
-      category,
-      //shotRelevance,
-      relevantContent,
-      irrelevantContent,
-      audioDuration,
-      //mergedShots,
-      //mostRelevantShots,
-      shots,
-    operationResult
-    };
+      mainTopic = groupedTranscripts.main_topic;
+      summary = groupedTranscripts.summary;
+      category = groupedTranscripts.category;
+      audioDuration = groupedTranscripts.totalDuration;
+      language = LANGUAGE_NAMES[(speechTranscripts[0]?.languageCode || '').toLowerCase()] || 'Unknown';
+      relevantContent = groupedTranscripts.relevant_content.mergedContent;
+      irrelevantContent = groupedTranscripts.irrelevant_content;
+    }
 
-  } catch (error) {
-    console.error('Error in video analysis:', error);
-    throw error;
-  }
-}
-
-/**
- * Processes a video file, analyzes it, and returns the clipped video URL
- * @param {Buffer} fileBuffer - The video file buffer
- * @returns {Promise<Object>} Analysis results with clipped video URL
- */
-async function processVideo(fileBuffer,description) {
-  try {
-    const analysisResults = await analyzeVideo(fileBuffer,description);
-
-    // Extract segments from relevant_content
+    // Step 5: Video processing and clipping
     const segmentsToKeep = [];
 
-   // Add merged segments
-    if (analysisResults.relevantContent) {
-      analysisResults.relevantContent.forEach(segment => {
+    // Add merged segments
+    if (relevantContent) {
+      relevantContent.forEach(segment => {
         segmentsToKeep.push({
           startTime: segment.startTime,
           endTime: segment.endTime
@@ -228,69 +99,43 @@ async function processVideo(fileBuffer,description) {
       });
     }
 
-    console.log('Segments to keep:', segmentsToKeep);
+    let clippedVideoUrl = "";
+    let videoWithAudioUrl = "";
 
-
-    let clippedVideoUrl="";
-    let videoWithAudioUrl="";
-    
-    //Only proceed with video clipping if there are segments to keep
+    // Only proceed with video clipping if there are segments to keep
     if (segmentsToKeep.length > 0) {
       // Get the total duration from the last shot or use a default
-       const totalDuration = analysisResults.shots[analysisResults.shots.length - 1]?.endTime || 70;
+      const totalDuration = shots[shots.length - 1]?.endTime || 70;
 
       // Upload video to Cloudinary
-    const videoUrl = await uploadVideoToCloudinary(fileBuffer);
-    console.log('Video uploaded to Cloudinary:', videoUrl);
-    //const videoUrl='https://res.cloudinary.com/ds0opfsmi/video/upload/v1750403161/my_videos/n6laqunc2xjn75dco6nm.mp4'
+      const videoUrl = await uploadVideoToCloudinary(fileBuffer);
 
-      //Call removeClipFromVideo with the segments
-     const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
-      console.log('Render ID:', renderId);
-      const ownerId = process.env.OWNER_ID;
+      // Call removeClipFromVideo with the segments
+      const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
       clippedVideoUrl = renderId.url;
-      
-      //Generate voice over and overlay it on the video.`https://shotstack-api-v1-output.s3-ap-southeast-2.amazonaws.com/${ownerId}/${videoWithAudioId}.mp4`;
-      const voiceOver=await generateVoiceOver(analysisResults.summary,analysisResults.relevantContent,analysisResults.audioDuration); 
-      console.log('Voice Over:',voiceOver);
-      const audioUrl=await convertTextToSpeech(voiceOver,analysisResults.language);
-      console.log('Audio URL:',audioUrl);
-      const videoWithAudioId=await overlayAudioOnVideo(clippedVideoUrl,audioUrl,analysisResults.audioDuration);
+
+      // Generate voice over and overlay it on the video
+      const voiceOver = await generateVoiceOver(summary, relevantContent, audioDuration);
+      const audioUrl = await convertTextToSpeech(voiceOver, language);
+      const videoWithAudioId = await overlayAudioOnVideo(clippedVideoUrl, audioUrl, audioDuration);
       videoWithAudioUrl = videoWithAudioId.url;
-      console.log('Video with Audio URL:',videoWithAudioUrl);
-    
-    } else {
-      // If no segments to keep, use the original video URL
-      clippedVideoUrl = "";
     }
 
-    return {
-      ...analysisResults,
+    // Step 6: Return comprehensive results
+    const results = {
+      language,
+      mainTopic,
+      summary,
+      category,
+      relevantContent,
+      irrelevantContent,
+      audioDuration,
+      shots,
+      operationResult,
       clippedVideoUrl,
       videoWithAudioUrl
     };
-  } catch (error) {
-    console.error('Error in video processing:', error);
-    throw error;
-  }
-}
 
-/**
- * Handles the video upload and processing request
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
-async function handleVideoUpload(req, res) {
-  console.log('handleVideoUpload');
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No video file uploaded' });
-    }
-
-    const description = req.body.summary || null;
-    const results = await processVideo(req.file.buffer, description);
-
-    console.log('Description:', description);
     res.json(results);
 
   } catch (error) {
@@ -300,8 +145,6 @@ async function handleVideoUpload(req, res) {
 }
 
 module.exports = {
-  analyzeVideo,
-  processVideo,
-  handleVideoUpload,
+  summarizeVideo,
   upload
 };

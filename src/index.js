@@ -1,31 +1,23 @@
-// Install dependencies before running:
-// npm install express multer @google-cloud/video-intelligence dotenv cors
 const { File } = require('node:buffer');
 global.File = File;
 const express = require('express');
 const cors = require('cors');
-const { handleVideoUpload, upload } = require('./controllers/videoAnalysisController');
+const videoSummaryRoutes = require('./routes/videoSummaryRoute');
 require('dotenv').config();
-
 
 const app = express();
 const port = process.env.PORT || 7000;
 
-
-
-// Enable CORS for all routes
 app.use(cors({
-  origin: '*', // Allow all origins
-  methods: ['GET', 'POST'], // Allowed methods
-  allowedHeaders: ['Content-Type', 'Authorization'] // Allowed headers
+  origin: '*', 
+  methods: ['GET', 'POST'], 
+  allowedHeaders: ['Content-Type', 'Authorization'] 
 }));
 
-// Parse JSON bodies
+
 app.use(express.json());
 
-
-// POST route to receive video and analyze it
-app.post('/api/v2/analyze-video', upload.single('video'), handleVideoUpload);
+app.use('/api/v2', videoSummaryRoutes);
 
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);

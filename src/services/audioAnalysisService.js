@@ -15,7 +15,7 @@ const openai = new OpenAI({
  * @returns {Promise<Object>} - Object containing detected language and news category
  */
 async function extractAudioAndAnalyze(videoBuffer) {
- // console.log('Extracting audio from video buffer...');
+ 
   const tempVideoPath = path.join('/tmp', `temp_video_${Date.now()}.mp4`);
   const tempAudioPath = path.join('/tmp', `temp_audio_${Date.now()}.wav`);
 
@@ -30,19 +30,16 @@ async function extractAudioAndAnalyze(videoBuffer) {
       .audioBitrate('32k') // Reduce bitrate
       .format('wav')
       .on('end', async () => {
-       // console.log('Audio extraction complete. Transcribing with OpenAI Whisper...');
         try {
           // Use OpenAI Whisper API to transcribe
           const transcript = await openai.audio.transcriptions.create({
             file: fs.createReadStream(tempAudioPath),
             model: "whisper-1"
           });
-          //console.log('Transcription complete. Analyzing transcript...');
-          
+         
           // Analyze the transcript to determine news category and language
           const analysis = await analyzeTranscript(transcript.text);
-          //console.log('Analysis complete:', analysis);
-
+          
           // Clean up temp files
           fs.unlinkSync(tempVideoPath);
           fs.unlinkSync(tempAudioPath);
@@ -73,7 +70,7 @@ async function extractAudioAndAnalyze(videoBuffer) {
  * @returns {Promise<Object>} - Object containing detected language and news category
  */
 async function analyzeTranscript(transcript) {
-  //console.log('Analyzing transcript for language and news category...');
+  
   const response = await openai.chat.completions.create({
     model: 'gpt-3.5-turbo',  
     messages: [
