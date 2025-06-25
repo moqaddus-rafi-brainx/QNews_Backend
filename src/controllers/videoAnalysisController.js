@@ -8,6 +8,7 @@ const { uploadVideoToCloudinary } = require('../services/cloudinaryUpload');
 const { removeClipFromVideo,overlayAudioOnVideo } = require('../services/videoTrimmingService');
 const { annotateVideoWithGoogle, processVideoAnnotation } = require('../services/googleService');
 const { generateVoiceOver, convertTextToSpeech } = require('../services/voiceOverGenerationService');
+const { processVideoWithSubtitles, generateSRTFromTranscripts } = require('../services/subtitleGenerationService');
 require('dotenv').config();
 
 // Configure multer for in-memory storage
@@ -50,7 +51,7 @@ async function summarizeVideo(req, res) {
     let irrelevantContent = null;
     let category = null;
     let audioDuration = null;
-
+    let speakerPresent = false;
     // Step 4: Process based on transcript sufficiency
     if (mainTopicUsingTranscripts.main_topic === "Transcript is too short to determine the main topic" || mainTopicUsingTranscripts.is_sufficient === false) {
       
@@ -74,7 +75,7 @@ async function summarizeVideo(req, res) {
     } else {
       
       const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
-      const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps, fileBuffer, shots, mainTopicUsingTranscripts);
+      const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps,speechTranscripts, fileBuffer, shots, mainTopicUsingTranscripts);
     
       
       mainTopic = groupedTranscripts.main_topic;
@@ -84,6 +85,7 @@ async function summarizeVideo(req, res) {
       language = LANGUAGE_NAMES[(speechTranscripts[0]?.languageCode || '').toLowerCase()] || 'Unknown';
       relevantContent = groupedTranscripts.relevant_content.mergedContent;
       irrelevantContent = groupedTranscripts.irrelevant_content;
+      speakerPresent = groupedTranscripts.speaker_present;
     }
 
     // Step 5: Video processing and clipping
@@ -108,17 +110,42 @@ async function summarizeVideo(req, res) {
       const totalDuration = shots[shots.length - 1]?.endTime || 70;
 
       // Upload video to Cloudinary
-      const videoUrl = await uploadVideoToCloudinary(fileBuffer);
+     // const videoUrl = await uploadVideoToCloudinary(fileBuffer);
 
-      // Call removeClipFromVideo with the segments
-      const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
-      clippedVideoUrl = renderId.url;
 
       // Generate voice over and overlay it on the video
-      const voiceOver = await generateVoiceOver(summary, relevantContent, audioDuration);
-      const audioUrl = await convertTextToSpeech(voiceOver, language);
-      const videoWithAudioId = await overlayAudioOnVideo(clippedVideoUrl, audioUrl, audioDuration);
-      videoWithAudioUrl = videoWithAudioId.url;
+      if(!speakerPresent){
+        // Call removeClipFromVideo with the segments
+        const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
+        clippedVideoUrl = renderId.url;
+        const voiceOver = await generateVoiceOver(summary, relevantContent, audioDuration);
+        const audioUrl = await convertTextToSpeech(voiceOver, language);
+        const videoWithAudioId = await overlayAudioOnVideo(clippedVideoUrl, audioUrl, audioDuration);
+        videoWithAudioUrl = videoWithAudioId.url;
+      }
+      else{
+        //Clipping first then add subtitles so that a smaller video is saved in /tmp for ffmpeg to apply subtitles. 
+        // Call removeClipFromVideo with the segments
+      const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
+      clippedVideoUrl = renderId.url;
+      //using openai to get srt file content using transcript+timestamps
+        
+      const subtitleResult = await processVideoWithSubtitles(clippedVideoUrl,relevantContent);
+      
+      if (!subtitleResult.success) {
+        throw new Error(`Failed to process video with subtitles: ${subtitleResult.error}`);
+      }
+      
+      const { cloudinaryUrl } = subtitleResult;
+      
+      if (!cloudinaryUrl) {
+        throw new Error('No cloudinary URL returned from subtitle processing');
+      }
+
+        videoWithAudioUrl = cloudinaryUrl;
+     
+      }
+      
     }
 
     // Step 6: Return comprehensive results
@@ -133,7 +160,8 @@ async function summarizeVideo(req, res) {
       shots,
       operationResult,
       clippedVideoUrl,
-      videoWithAudioUrl
+      videoWithAudioUrl,
+      speakerPresent
     };
 
     res.json(results);

@@ -1,6 +1,8 @@
-
 const { OpenAI } = require('openai');
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const ffmpeg = require('fluent-ffmpeg');
 
 const {selectMostRelevantShotsWithin30sGreedy} = require('./visualAnalysisService');
 
@@ -8,6 +10,65 @@ const {selectMostRelevantShotsWithin30sGreedy} = require('./visualAnalysisServic
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+
+async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate = 1) {
+  return new Promise((resolve, reject) => {
+    const frames = [];
+    const tempDir = '/tmp';
+    
+    const outputPattern = path.join(tempDir, `frame_${startTime}_%d.jpg`);
+
+    // Create a temporary file to store the video buffer
+    const tempVideoPath = path.join(tempDir, `temp_video_${Date.now()}.mp4`);
+    fs.writeFileSync(tempVideoPath, videoBuffer);
+
+    ffmpeg(tempVideoPath)
+      .setStartTime(startTime)
+      .setDuration(endTime - startTime)
+      .fps(frameRate)
+      .on('end', async () => {
+        try {
+          // Read all frames from temp directory
+          const files = fs.readdirSync(tempDir)
+            .filter(file => file.startsWith(`frame_${startTime}_`))
+            .sort((a, b) => {
+              const numA = parseInt(a.split('_').pop());
+              const numB = parseInt(b.split('_').pop());
+              return numA - numB;
+            });
+
+          // Read each frame file
+          for (const file of files) {
+            const framePath = path.join(tempDir, file);
+            const frameBuffer = fs.readFileSync(framePath);
+            frames.push(frameBuffer);
+            // Clean up the file
+            fs.unlinkSync(framePath);
+          }
+
+          // Clean up the temporary video file
+          fs.unlinkSync(tempVideoPath);
+
+          resolve(frames);
+        } catch (error) {
+          // Clean up the temporary video file in case of error
+          if (fs.existsSync(tempVideoPath)) {
+            fs.unlinkSync(tempVideoPath);
+          }
+          reject(error);
+        }
+      })
+      .on('error', (err) => {
+        // Clean up the temporary video file in case of error
+        if (fs.existsSync(tempVideoPath)) {
+          fs.unlinkSync(tempVideoPath);
+        }
+        reject(err);
+      })
+      .save(outputPattern);
+  });
+}
 
 
 /**
@@ -88,24 +149,32 @@ async function analyzeVoiceTypeWithFrames(transcript, frames) {
     });
 
     const prompt = `
-You are an expert content analyzer. Analyze this transcript segment to determine if it's a voiceover (narration) or if the speaker is visible in the video.
+You are a multimodal content analyst. Your task is to determine whether the speaker in the transcript segment is visually present on screen during the same time interval.
+
+Use both:
+- The transcript text (including tone, language, and context)
+- The corresponding video frames (captured during the same timestamps)
 
 Transcript segment:
 "${transcript.transcript}"
 
-Timestamp: ${transcript.startTime}s - ${transcript.endTime}s
+Time Range: ${transcript.startTime}s to ${transcript.endTime}s
 
-Consider these factors:
-1. The language and style of speech (formal narration vs. conversational)
-2. The content type (news reporting, documentary narration, interview, etc.)
-3. The presence of first-person references or direct address
-4. The tone and delivery style
+Visual Input:
+You are also provided with a series of frames (images) captured from the video during this time range. Carefully analyze these images for the presence of a visible speaker (person talking on screen).
 
-Return result as JSON with this format:
+Evaluate based on:
+1. The style of speech (formal narration vs. casual conversation).
+2. Presence of first-person language or direct address to the viewer.
+3. Visual cues — Is there a person in the frames who appears to be speaking? (e.g., open mouth, eye contact, gestures).
+4. Matching tone and context between what's said and what's shown.
+
+Return result as JSON in the following format:
+
 {
-  "voice_type": "voiceover" or "speaker_visible",
-  "confidence": "high" or "medium" or "low",
-  "explanation": "Brief explanation of why this is likely a voiceover or visible speaker"
+  "voice_type": "speaker_visible" or "voiceover",
+  "confidence": "high" | "medium" | "low",
+  "explanation": "Short explanation of how both transcript and frames support this classification"
 }
 `;
 
@@ -186,12 +255,66 @@ function mergeCloseTranscripts(transcripts) {
 }
 
 /**
+ * Finds relevant shots that correspond to the given transcript timestamps
+ * @param {Array} relevantTranscripts - Array of relevant transcript objects with startTime and endTime
+ * @param {Array} allShots - Array of all shot objects with startTime and endTime
+ * @returns {Array} Array of relevant shots that overlap with transcript timestamps
+ */
+function findRelevantShotsForTranscripts(relevantTranscripts, allShots) {
+  if (!relevantTranscripts || relevantTranscripts.length === 0 || !allShots || allShots.length === 0) {
+    return [];
+  }
+
+  const relevantShots = [];
+
+  // For each relevant transcript, find shots that overlap with its time range
+  for (const transcript of relevantTranscripts) {
+    const transcriptStartTime = parseFloat(transcript.startTime);
+    const transcriptEndTime = parseFloat(transcript.endTime);
+
+    // Find shots that overlap with this transcript's time range
+    const overlappingShots = allShots.filter(shot => {
+      const shotStartTime = parseFloat(shot.startTime);
+      const shotEndTime = parseFloat(shot.endTime);
+
+      // Check for overlap: shot overlaps with transcript if:
+      // 1. Shot starts within transcript time range, OR
+      // 2. Shot ends within transcript time range, OR
+      // 3. Shot completely contains transcript time range, OR
+      // 4. Transcript completely contains shot time range
+      const shotStartsInTranscript = shotStartTime >= transcriptStartTime && shotStartTime <= transcriptEndTime;
+      const shotEndsInTranscript = shotEndTime >= transcriptStartTime && shotEndTime <= transcriptEndTime;
+      const shotContainsTranscript = shotStartTime <= transcriptStartTime && shotEndTime >= transcriptEndTime;
+      const transcriptContainsShot = transcriptStartTime <= shotStartTime && transcriptEndTime >= shotEndTime;
+
+      return shotStartsInTranscript || shotEndsInTranscript || shotContainsTranscript || transcriptContainsShot;
+    });
+
+    // Add overlapping shots to relevant shots array
+    relevantShots.push(...overlappingShots);
+  }
+
+  // Remove duplicates (in case multiple transcripts overlap with the same shot)
+  const uniqueRelevantShots = relevantShots.filter((shot, index, self) => 
+    index === self.findIndex(s => 
+      parseFloat(s.startTime) === parseFloat(shot.startTime) && 
+      parseFloat(s.endTime) === parseFloat(shot.endTime)
+    )
+  );
+
+  // Sort by start time
+  uniqueRelevantShots.sort((a, b) => parseFloat(a.startTime) - parseFloat(b.startTime));
+
+  return uniqueRelevantShots;
+}
+
+/**
  * Groups transcripts into relevant (main topic) and irrelevant content
  * @param {Array} transcripts - Array of transcript objects with transcript, language, startTime, endTime
  * @param {Buffer} videoBuffer - Video file buffer
  * @returns {Promise<Object>} Object containing relevant and irrelevant groups
  */
-async function groupRelatedTranscripts(transcripts, videoBuffer,shots,mainTopic) {
+async function groupRelatedTranscripts(transcripts,speechTranscripts, videoBuffer,shots,mainTopic) {
   const relevantGroup = [];
   const irrelevantGroup = [];
 
@@ -244,9 +367,37 @@ Assess relevance and importance. Return JSON:
     }
   }
 
-  // Merge close transcripts in relevant group
+  const mergedContentWithVoiceType=await analyzeSpeakerPresenceForRelevantGroup(relevantGroup,videoBuffer);
+  console.log('mergedContentWithVoiceType:',mergedContentWithVoiceType);
+  
+  // Check if any merged content has a visible speaker with high confidence
+  const speakerPresent = mergedContentWithVoiceType.some(content => 
+    content.analysis.voice_type === 'speaker_visible' && 
+    content.analysis.confidence === 'high'
+  );
+  let relevantSentences = [];
+  let selectedShots;
+  let totalDuration;
+  if(speakerPresent){
+    console.log('speakerPresent:',speakerPresent);
 
-  const {selectedShots,totalDuration}= selectMostRelevantShotsWithin30sGreedy(relevantGroup);
+    // Break down relevant transcripts into sentences
+    relevantSentences = breakDownRelevantTranscriptsIntoSentences(speechTranscripts, relevantGroup);
+    console.log('Relevant sentences:', relevantSentences);
+    const result= selectMostRelevantShotsWithin30sGreedy(relevantSentences);
+    selectedShots=result.selectedShots;
+    totalDuration=result.totalDuration;
+
+  }
+  else{
+    //Find shots that corresponds to the relevant transcripts
+    //const relevantShots=findRelevantShotsForTranscripts(relevantGroup,shots);
+    const result= selectMostRelevantShotsWithin30sGreedy(relevantGroup);
+    selectedShots=result.selectedShots;
+    totalDuration=result.totalDuration;
+
+
+  }
   
   const mergedGroups = mergeCloseTranscripts(selectedShots);
   
@@ -257,6 +408,8 @@ Assess relevance and importance. Return JSON:
     endTime: group[group.length - 1].endTime
   }));
 
+
+  
   const unmergedContent = relevantGroup.filter(transcript => 
     !mergedGroups.some(group => group.includes(transcript))
   ).map(transcript => ({
@@ -270,9 +423,10 @@ Assess relevance and importance. Return JSON:
     summary: mainTopicAnalysis.summary,
     category: mainTopicAnalysis.category,
     is_ai_generated: mainTopicAnalysis.is_ai_generated,
+    speaker_present: speakerPresent,
     relevant_content: {
        mergedContent,
-
+       sentences: relevantSentences
     },
     irrelevant_content: {
       transcripts: irrelevantGroup,
@@ -283,10 +437,147 @@ Assess relevance and importance. Return JSON:
   };
 }
 
+/**
+ * For each transcript in the relevant group, extract frames and analyze for speaker presence
+ * @param {Array} relevantGroup - Array of relevant transcript objects (with transcript, startTime, endTime, relevanceScore)
+ * @param {Buffer} videoBuffer - The video file buffer
+ * @param {number} frameRate - Frames per second to extract (default 1)
+ * @returns {Promise<Array>} Array of results for each transcript in the relevant group
+ */
+async function analyzeSpeakerPresenceForRelevantGroup(relevantGroup, videoBuffer, frameRate = 1) {
+  const results = [];
+  for (const transcript of relevantGroup) {
+    const { startTime, endTime, transcript: transcriptText, relevanceScore } = transcript;
+    
+    // Create transcript object for analysis
+    const transcriptForAnalysis = {
+      transcript: transcriptText,
+      startTime,
+      endTime
+    };
+    
+    // Extract frames for this time range
+    const frames = await extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate);
+    
+    // Analyze speaker presence
+    const analysis = await analyzeVoiceTypeWithFrames(transcriptForAnalysis, frames);
+    
+    results.push({
+      startTime,
+      endTime,
+      analysis,
+      transcript: transcriptText,
+      relevanceScore
+    });
+  }
+  return results;
+}
 
+/**
+ * Breaks down relevant group transcripts into sentences by matching with speech transcripts
+ * @param {Array} speechTranscripts - Array of speech transcript objects with words and timestamps
+ * @param {Array} relevantGroup - Array of relevant transcript objects with startTime, endTime, transcript
+ * @returns {Array} Array of sentence objects with transcript, startTime, endTime
+ */
+function breakDownRelevantTranscriptsIntoSentences(speechTranscripts, relevantGroup) {
+  const sentences = [];
+  
+  // For each relevant transcript, find matching speech transcript and break into sentences
+  for (const relevantTranscript of relevantGroup) {
+    const relevantStartTime = parseFloat(relevantTranscript.startTime);
+    const relevantEndTime = parseFloat(relevantTranscript.endTime);
+    
+    // Find speech transcript that overlaps with this relevant transcript
+    const matchingSpeechTranscript = speechTranscripts.find(speech => {
+      // Check if there's any overlap between the time ranges
+      const speechWords = speech.words;
+      if (speechWords.length === 0) return false;
+      
+      const speechStartTime = speechWords[0].startTime;
+      const speechEndTime = speechWords[speechWords.length - 1].endTime;
+      
+      // Check for overlap
+      return (speechStartTime <= relevantEndTime && speechEndTime >= relevantStartTime);
+    });
+    
+    if (!matchingSpeechTranscript) {
+      // If no matching speech transcript found, add the entire relevant transcript as one sentence
+      sentences.push({
+        transcript: relevantTranscript.transcript,
+        startTime: relevantTranscript.startTime,
+        endTime: relevantTranscript.endTime,
+        relevanceScore: relevantTranscript.relevanceScore
+      });
+      continue;
+    }
+    
+    // Find words that fall within the relevant transcript time range
+    const relevantWords = matchingSpeechTranscript.words.filter(word => {
+      return word.startTime >= relevantStartTime && word.endTime <= relevantEndTime;
+    });
+    
+    if (relevantWords.length === 0) {
+      // If no words found in the time range, add the entire relevant transcript
+      sentences.push({
+        transcript: relevantTranscript.transcript,
+        startTime: relevantTranscript.startTime,
+        endTime: relevantTranscript.endTime,
+        relevanceScore: relevantTranscript.relevanceScore
+      });
+      continue;
+    }
+    
+    // Break down into sentences by finding words that end with '.'
+    let currentSentence = [];
+    let sentenceStartTime = relevantWords[0].startTime;
+    
+    for (let i = 0; i < relevantWords.length; i++) {
+      const word = relevantWords[i];
+      currentSentence.push(word);
+      
+      // Check if this word ends with a period (indicating end of sentence)
+      if (word.word.trim().endsWith('.')) {
+        // Create sentence object
+        const sentenceText = currentSentence.map(w => w.word).join(' ');
+        const sentenceEndTime = word.endTime;
+        
+        sentences.push({
+          transcript: sentenceText,
+          startTime: sentenceStartTime,
+          endTime: sentenceEndTime,
+          relevanceScore: relevantTranscript.relevanceScore
+        });
+        
+        // Reset for next sentence
+        currentSentence = [];
+        if (i + 1 < relevantWords.length) {
+          sentenceStartTime = relevantWords[i + 1].startTime;
+        }
+      }
+    }
+    
+    // If there are remaining words that don't end with a period, add them as the last sentence
+    if (currentSentence.length > 0) {
+      const sentenceText = currentSentence.map(w => w.word).join(' ');
+      const sentenceEndTime = currentSentence[currentSentence.length - 1].endTime;
+      
+      sentences.push({
+        transcript: sentenceText,
+        startTime: sentenceStartTime,
+        endTime: sentenceEndTime,
+        relevanceScore: relevantTranscript.relevanceScore
+      });
+    }
+  }
+  
+  return sentences;
+}
 
 module.exports = {
   analyzeMainTopic,
   groupRelatedTranscripts,
-  mergeCloseTranscripts
+  mergeCloseTranscripts,
+  findRelevantShotsForTranscripts,
+  analyzeSpeakerPresenceForRelevantGroup,
+  breakDownRelevantTranscriptsIntoSentences
 };

@@ -17,7 +17,7 @@ const openai = new OpenAI({
 async function extractAudioAndAnalyze(videoBuffer) {
  
   const tempVideoPath = path.join('/tmp', `temp_video_${Date.now()}.mp4`);
-  const tempAudioPath = path.join('/tmp', `temp_audio_${Date.now()}.wav`);
+  const tempAudioPath = path.join('/tmp', `temp_audio_${Date.now()}.mp3`);
 
   // Write buffer to temp file
   fs.writeFileSync(tempVideoPath, videoBuffer);
@@ -26,11 +26,21 @@ async function extractAudioAndAnalyze(videoBuffer) {
     ffmpeg(tempVideoPath)
       .inputOptions('-t', '30') // Limit to first 30 seconds
       .audioChannels(1) // Convert to mono
-      .audioFrequency(16000) // Reduce sample rate
+      .audioFrequency(16000) // Reduce sample rate to 16kHz (Whisper requirement)
       .audioBitrate('32k') // Reduce bitrate
-      .format('wav')
+      .format('mp3') // Use MP3 format instead of WAV
       .on('end', async () => {
         try {
+          // Check if audio file exists and has content
+          if (!fs.existsSync(tempAudioPath)) {
+            throw new Error('Audio file was not created');
+          }
+          
+          const stats = fs.statSync(tempAudioPath);
+          if (stats.size === 0) {
+            throw new Error('Audio file is empty');
+          }
+
           // Use OpenAI Whisper API to transcribe
           const transcript = await openai.audio.transcriptions.create({
             file: fs.createReadStream(tempAudioPath),
@@ -50,7 +60,12 @@ async function extractAudioAndAnalyze(videoBuffer) {
           // Clean up temp files even if there's an error
           if (fs.existsSync(tempVideoPath)) fs.unlinkSync(tempVideoPath);
           if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
-          reject(error);
+          
+          // Return a default response instead of rejecting
+          resolve({
+            detectedLanguage: "en-US",
+            newsCategory: "other"
+          });
         }
       })
       .on('error', (err) => {
@@ -58,7 +73,12 @@ async function extractAudioAndAnalyze(videoBuffer) {
         // Clean up temp files on error
         if (fs.existsSync(tempVideoPath)) fs.unlinkSync(tempVideoPath);
         if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
-        reject(err);
+        
+        // Return a default response instead of rejecting
+        resolve({
+          detectedLanguage: "en-US",
+          newsCategory: "other"
+        });
       })
       .save(tempAudioPath);
   });
