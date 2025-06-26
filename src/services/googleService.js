@@ -22,7 +22,6 @@ async function annotateVideoWithGoogle(fileBuffer, languageCode) {
       'SPEECH_TRANSCRIPTION',
       'LABEL_DETECTION',
       'SHOT_CHANGE_DETECTION',
-      //'TEXT_DETECTION'
     ],
     videoContext: {
       speechTranscriptionConfig: {
