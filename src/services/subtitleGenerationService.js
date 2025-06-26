@@ -327,13 +327,13 @@ async function generateSRTFromTranscripts(relevantContent, targetLanguage = 'en'
     console.log('Translated transcript data:', transcriptData);
 
     const prompt = `
-You are a professional subtitle file generator. Your task is to create high-quality English subtitles from the provided transcript segments.
+You are a professional subtitle file generator. Your task is to create high-quality English subtitles from the provided transcript segments and their translations.
 
 Instructions:
 1. Translate the text to natural, fluent English
 2. Break long segments into shorter lines for subtitles.
 3. All subtitles should be within the following time range(hh:mm:ss,mmm): (${secondsToSRTTime(transcripts[0].startTime)} - ${secondsToSRTTime(transcripts[transcripts.length - 1].endTime)})
-4. Ensure each subtitle line is synchronized with the provided timestamps for that particular segment.
+4. Ensure each subtitle line is synchronized with the corresponding transcript timestamp.
 5. Format the output as a valid SRT file with EXACT formatting.
 
 IMPORTANT: Use EXACTLY this SRT format with no extra spaces or characters:
@@ -346,7 +346,7 @@ Subtitle text here
 Another subtitle here
 
 Transcript segments with timestamps:
-${transcriptData.map(t => `Segment ${t.id}: "${t.originalText}" (${secondsToSRTTime(t.startTime)} - ${secondsToSRTTime(t.endTime)})`).join('\n')}
+${transcriptData.map(t => `Segment ${t.id}: "${t.originalText}" \n  Translated text: "${t.translatedText}" \n  (${secondsToSRTTime(t.startTime)} - ${secondsToSRTTime(t.endTime)})`).join('\n')}
 
 Generate a complete SRT file. Return ONLY the SRT content in the exact format shown above, with no additional text, explanations, or formatting variations.
 `;

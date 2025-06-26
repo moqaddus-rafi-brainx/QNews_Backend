@@ -429,7 +429,8 @@ Assess relevance and importance. Return JSON:
     console.log('speakerPresent:',speakerPresent);
 
     // Break down relevant transcripts into sentences
-    relevantSentences = breakDownRelevantTranscriptsIntoSentences(speechTranscripts, relevantGroup);
+    //relevantSentences = breakDownRelevantTranscriptsIntoSentences(speechTranscripts, relevantGroup);
+    relevantSentences=await divideTranscriptsIntoSentencesWithAI(relevantGroup,speechTranscripts);
     console.log('Relevant sentences:', relevantSentences);
     const result= selectMostRelevantShotsWithin30sGreedy(relevantSentences);
     selectedShots=result.selectedShots;
@@ -622,11 +623,146 @@ function breakDownRelevantTranscriptsIntoSentences(speechTranscripts, relevantGr
   return sentences;
 }
 
+/**
+ * Divides relevant transcripts into sentences using OpenAI with proper timestamps
+ * @param {Array} relevantTranscripts - Array of relevant transcript objects with transcript, startTime, endTime
+ * @param {Array} speechTranscripts - Array of speech transcript objects with words and timestamps
+ * @returns {Promise<Array>} Array of sentence objects with transcript, startTime, endTime
+ */
+async function divideTranscriptsIntoSentencesWithAI(relevantTranscripts, speechTranscripts) {
+  const sentences = [];
+  
+  for (const relevantTranscript of relevantTranscripts) {
+    const relevantStartTime = parseFloat(relevantTranscript.startTime);
+    const relevantEndTime = parseFloat(relevantTranscript.endTime);
+    
+    // Find speech transcript that overlaps with this relevant transcript
+    const matchingSpeechTranscript = speechTranscripts.find(speech => {
+      const speechWords = speech.words;
+      if (speechWords.length === 0) return false;
+      
+      const speechStartTime = speechWords[0].startTime;
+      const speechEndTime = speechWords[speechWords.length - 1].endTime;
+      
+      // Check for overlap
+      return (speechStartTime <= relevantEndTime && speechEndTime >= relevantStartTime);
+    });
+    
+    if (!matchingSpeechTranscript) {
+      // If no matching speech transcript found, add the entire relevant transcript as one sentence
+      sentences.push({
+        transcript: relevantTranscript.transcript,
+        startTime: relevantTranscript.startTime,
+        endTime: relevantTranscript.endTime,
+        relevanceScore: relevantTranscript.relevanceScore || 0
+      });
+      continue;
+    }
+    
+    // Find words that fall within the relevant transcript time range
+    const relevantWords = matchingSpeechTranscript.words.filter(word => {
+      return word.startTime >= relevantStartTime && word.endTime <= relevantEndTime;
+    });
+    
+    if (relevantWords.length === 0) {
+      // If no words found in the time range, add the entire relevant transcript
+      sentences.push({
+        transcript: relevantTranscript.transcript,
+        startTime: relevantTranscript.startTime,
+        endTime: relevantTranscript.endTime,
+        relevanceScore: relevantTranscript.relevanceScore || 0
+      });
+      continue;
+    }
+    
+    // Prepare the transcript text and words for AI analysis
+    const transcriptText = relevantTranscript.transcript;
+    const wordsWithTimestamps = relevantWords.map(word => ({
+      word: word.word,
+      startTime: word.startTime,
+      endTime: word.endTime
+    }));
+    
+    const prompt = `
+You are a transcript analyzer. Your task is to divide the given transcript into natural sentences and provide the start and end times for each sentence.
+
+Transcript: "${transcriptText}"
+
+Available words with timestamps:
+${wordsWithTimestamps.map(w => `"${w.word}" (${w.startTime}s - ${w.endTime}s)`).join('\n')}
+
+Instructions:
+1. Analyze the transcript and identify natural sentence boundaries
+2. For each sentence, find the corresponding words from the available words list
+3. Use the first word's startTime as the sentence's startTime
+4. Use the last word's endTime as the sentence's endTime
+5. Only use words that are actually present in the available words list
+
+Return the result as JSON in this format:
+{
+  "sentences": [
+    {
+      "sentence": "The actual sentence text",
+      "startTime": 12.5,
+      "endTime": 15.2,
+      "words": ["word1", "word2", "word3"]
+    }
+  ]
+}
+
+Important: Only include sentences that can be constructed from the available words. If the transcript cannot be properly divided into sentences, return the entire transcript as one sentence.
+`;
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3
+      });
+
+      const text = response.choices[0].message.content;
+      const result = parseOpenAIResponse(text);
+      
+      if (result.sentences && Array.isArray(result.sentences)) {
+        // Add each sentence to the results
+        result.sentences.forEach(sentenceData => {
+          sentences.push({
+            transcript: sentenceData.sentence,
+            startTime: sentenceData.startTime,
+            endTime: sentenceData.endTime,
+            relevanceScore: relevantTranscript.relevanceScore || 0
+          });
+        });
+      } else {
+        // Fallback: add the entire transcript as one sentence
+        sentences.push({
+          transcript: relevantTranscript.transcript,
+          startTime: relevantTranscript.startTime,
+          endTime: relevantTranscript.endTime,
+          relevanceScore: relevantTranscript.relevanceScore || 0
+        });
+      }
+    } catch (error) {
+      console.error("Failed to divide transcript into sentences with AI:", error);
+      // Fallback: add the entire transcript as one sentence
+      sentences.push({
+        transcript: relevantTranscript.transcript,
+        startTime: relevantTranscript.startTime,
+        endTime: relevantTranscript.endTime,
+        relevanceScore: relevantTranscript.relevanceScore || 0
+      });
+    }
+  }
+  
+  return sentences;
+}
+
 module.exports = {
   analyzeMainTopic,
   groupRelatedTranscripts,
   mergeCloseTranscripts,
   findRelevantShotsForTranscripts,
   analyzeSpeakerPresenceForRelevantGroup,
-  breakDownRelevantTranscriptsIntoSentences
+  breakDownRelevantTranscriptsIntoSentences,
+  divideTranscriptsIntoSentencesWithAI
 };
