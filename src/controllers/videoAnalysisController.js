@@ -110,7 +110,7 @@ async function summarizeVideo(req, res) {
       const totalDuration = shots[shots.length - 1]?.endTime || 70;
 
       // Upload video to Cloudinary
-     // const videoUrl = await uploadVideoToCloudinary(fileBuffer);
+      const videoUrl = await uploadVideoToCloudinary(fileBuffer);
 
 
       // Generate voice over and overlay it on the video
@@ -118,7 +118,7 @@ async function summarizeVideo(req, res) {
         // Call removeClipFromVideo with the segments
         const renderId = await removeClipFromVideo(videoUrl, segmentsToKeep, totalDuration);
         clippedVideoUrl = renderId.url;
-        const voiceOver = await generateVoiceOver(summary, relevantContent, audioDuration);
+        const voiceOver = await generateVoiceOver(summary, description,relevantContent, audioDuration);
         const audioUrl = await convertTextToSpeech(voiceOver, language);
         const videoWithAudioId = await overlayAudioOnVideo(clippedVideoUrl, audioUrl, audioDuration);
         videoWithAudioUrl = videoWithAudioId.url;

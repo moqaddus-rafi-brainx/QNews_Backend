@@ -53,7 +53,7 @@ async function convertTextToSpeech(text, voice) {
  * @param {number} duration - The desired duration of the voiceover in seconds
  * @returns {Promise<string>} - The generated voiceover script
  */
-async function generateVoiceOver(summary, contentData, duration) {
+async function generateVoiceOver(summary, description,contentData, duration) {
   let contentDescription = '';
   let contentType = '';
   
@@ -93,6 +93,7 @@ async function generateVoiceOver(summary, contentData, duration) {
   
   const prompt = `You are a professional transcript generator for voiceovers on summarized videos. Write a compelling, natural-sounding voiceover script summarizing the video content.
 
+Video Description: ${description}
 Video Summary: ${summary}
 ${contentType}: ${contentDescription}
 

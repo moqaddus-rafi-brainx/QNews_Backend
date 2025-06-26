@@ -12,7 +12,7 @@ const openai = new OpenAI({
 });
 
 
-async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate = 1) {
+async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate = 0.25, maxFrames = 3) {
   return new Promise((resolve, reject) => {
     const frames = [];
     const tempDir = '/tmp';
@@ -38,13 +38,24 @@ async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameR
               return numA - numB;
             });
 
+          // Limit the number of frames to maxFrames
+          const limitedFiles = files.slice(0, maxFrames);
+
           // Read each frame file
-          for (const file of files) {
+          for (const file of limitedFiles) {
             const framePath = path.join(tempDir, file);
             const frameBuffer = fs.readFileSync(framePath);
             frames.push(frameBuffer);
             // Clean up the file
             fs.unlinkSync(framePath);
+          }
+
+          // Clean up any remaining frame files
+          for (const file of files.slice(maxFrames)) {
+            const framePath = path.join(tempDir, file);
+            if (fs.existsSync(framePath)) {
+              fs.unlinkSync(framePath);
+            }
           }
 
           // Clean up the temporary video file
@@ -166,7 +177,7 @@ You are also provided with a series of frames (images) captured from the video d
 Evaluate based on:
 1. The style of speech (formal narration vs. casual conversation).
 2. Presence of first-person language or direct address to the viewer.
-3. Visual cues — Is there a person in the frames who appears to be speaking? (e.g., open mouth, eye contact, gestures).
+3. Visual cues — Is there the same person in multiple frames who appears to be speaking? (e.g., open mouth, eye contact, gestures).
 4. Matching tone and context between what's said and what's shown.
 
 Return result as JSON in the following format:
@@ -178,12 +189,26 @@ Return result as JSON in the following format:
 }
 `;
 
+    // Create content array with text and images
+    const content = [
+      {
+        type: "text",
+        text: prompt
+      },
+      ...frameDescriptions.map(frame => ({
+        type: "image_url",
+        image_url: {
+          url: frame
+        }
+      }))
+    ];
+
     const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o",
       messages: [
         {
           role: "user",
-          content: prompt
+          content: content
         }
       ],
       max_tokens: 300
@@ -274,16 +299,16 @@ function findRelevantShotsForTranscripts(relevantTranscripts, allShots) {
 
     // Find shots that overlap with this transcript's time range
     const overlappingShots = allShots.filter(shot => {
-      const shotStartTime = parseFloat(shot.startTime);
-      const shotEndTime = parseFloat(shot.endTime);
+      const shotStartTime = parseFloat(shot.startTime).toFixed(1);
+      const shotEndTime = parseFloat(shot.endTime).toFixed(1);
 
       // Check for overlap: shot overlaps with transcript if:
       // 1. Shot starts within transcript time range, OR
       // 2. Shot ends within transcript time range, OR
       // 3. Shot completely contains transcript time range, OR
       // 4. Transcript completely contains shot time range
-      const shotStartsInTranscript = shotStartTime >= transcriptStartTime && shotStartTime <= transcriptEndTime;
-      const shotEndsInTranscript = shotEndTime >= transcriptStartTime && shotEndTime <= transcriptEndTime;
+      const shotStartsInTranscript = shotStartTime >= transcriptStartTime && shotStartTime < transcriptEndTime;
+      const shotEndsInTranscript = shotEndTime > transcriptStartTime && shotEndTime <= transcriptEndTime;
       const shotContainsTranscript = shotStartTime <= transcriptStartTime && shotEndTime >= transcriptEndTime;
       const transcriptContainsShot = transcriptStartTime <= shotStartTime && transcriptEndTime >= shotEndTime;
 
@@ -391,10 +416,12 @@ Assess relevance and importance. Return JSON:
   }
   else{
     //Find shots that corresponds to the relevant transcripts
-    //const relevantShots=findRelevantShotsForTranscripts(relevantGroup,shots);
-    const result= selectMostRelevantShotsWithin30sGreedy(relevantGroup);
+    const relevantShots=findRelevantShotsForTranscripts(relevantGroup,shots);
+    const result= selectMostRelevantShotsWithin30sGreedy(relevantShots);
     selectedShots=result.selectedShots;
     totalDuration=result.totalDuration;
+    console.log('relevantShots:',relevantShots);
+    console.log('relevantGroup:',relevantGroup);
 
 
   }
@@ -441,10 +468,10 @@ Assess relevance and importance. Return JSON:
  * For each transcript in the relevant group, extract frames and analyze for speaker presence
  * @param {Array} relevantGroup - Array of relevant transcript objects (with transcript, startTime, endTime, relevanceScore)
  * @param {Buffer} videoBuffer - The video file buffer
- * @param {number} frameRate - Frames per second to extract (default 1)
+ * @param {number} frameRate - Frames per second to extract (default 0.25 - one frame every 4 seconds)
  * @returns {Promise<Array>} Array of results for each transcript in the relevant group
  */
-async function analyzeSpeakerPresenceForRelevantGroup(relevantGroup, videoBuffer, frameRate = 1) {
+async function analyzeSpeakerPresenceForRelevantGroup(relevantGroup, videoBuffer, frameRate = 0.25) {
   const results = [];
   for (const transcript of relevantGroup) {
     const { startTime, endTime, transcript: transcriptText, relevanceScore } = transcript;
@@ -456,7 +483,7 @@ async function analyzeSpeakerPresenceForRelevantGroup(relevantGroup, videoBuffer
       endTime
     };
     
-    // Extract frames for this time range
+    // Extract frames for this time range with reduced frame rate
     const frames = await extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate);
     
     // Analyze speaker presence
