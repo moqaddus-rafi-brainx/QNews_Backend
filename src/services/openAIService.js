@@ -11,6 +11,31 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+/**
+ * Utility function to parse JSON from OpenAI responses that may be wrapped in markdown code blocks
+ * @param {string} text - The response text from OpenAI
+ * @returns {Object} - Parsed JSON object
+ * @throws {Error} - If JSON parsing fails
+ */
+function parseOpenAIResponse(text) {
+  // Handle responses wrapped in markdown code blocks
+  let jsonText = text;
+  
+  // Remove markdown code block formatting if present
+  if (text.includes('```json')) {
+    jsonText = text.replace(/```json\s*/, '').replace(/\s*```/, '');
+  } else if (text.includes('```')) {
+    jsonText = text.replace(/```\s*/, '').replace(/\s*```/, '');
+  }
+  
+  // Find the first JSON object
+  const jsonStart = jsonText.indexOf('{');
+  if (jsonStart === -1) {
+    throw new Error('No JSON object found in response');
+  }
+  
+  return JSON.parse(jsonText.slice(jsonStart));
+}
 
 async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate = 0.25, maxFrames = 3) {
   return new Promise((resolve, reject) => {
@@ -128,8 +153,7 @@ Return result as JSON with this format:
   const text = response.choices[0].message.content;
   
   try {
-    const jsonStart = text.indexOf('{');
-    return JSON.parse(text.slice(jsonStart));
+    return parseOpenAIResponse(text);
   } catch (e) {
     console.error("Failed to parse OpenAI response for main topic:", text);
     return {
@@ -217,8 +241,7 @@ Return result as JSON in the following format:
     const text = response.choices[0].message.content;
     
     try {
-      const jsonStart = text.indexOf('{');
-      const result = JSON.parse(text.slice(jsonStart));
+      const result = parseOpenAIResponse(text);
       return result;
     } catch (e) {
       console.error("Failed to parse OpenAI response for voice type:", text);
@@ -369,8 +392,7 @@ Assess relevance and importance. Return JSON:
     const text = response.choices[0].message.content;
     
     try {
-      const jsonStart = text.indexOf('{');
-      const result = JSON.parse(text.slice(jsonStart));
+      const result = parseOpenAIResponse(text);
       
       if (result.is_relevant) {
         relevantGroup.push({
