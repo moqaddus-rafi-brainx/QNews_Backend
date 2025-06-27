@@ -573,7 +573,7 @@ function separateAndMergeRelevantShots(selectShots,allShots) {
  * @param {Array} shots - Array of shot objects: {startTime, endTime, description, relevanceScore, isRelevant}
  * @returns {Array} - Array of selected shots
  */
-function selectMostRelevantShotsWithin30sGreedy(shots) {
+  function selectMostRelevantShotsWithin30sGreedy(shots,speakerPresent) {
   // 1. Filter relevant shots based on either isRelevant or relevance_type
   const relevantShots = shots.filter(shot => {
     // If isRelevant field exists, use it
@@ -598,7 +598,7 @@ function selectMostRelevantShotsWithin30sGreedy(shots) {
   for(const shot of relevantShots){
     if(shot===relevantShots[0]) continue;
     let shotDuration = shot.endTime - shot.startTime;
-    if(totalDuration<25 && totalDuration+shotDuration>=35){
+    if(totalDuration<25 && totalDuration+shotDuration>=35 && !speakerPresent){
       const remainingDuration = 30 - totalDuration;
       shot.endTime = shot.startTime + remainingDuration;
       selectedShots.push(shot);
@@ -611,7 +611,7 @@ function selectMostRelevantShotsWithin30sGreedy(shots) {
     shotDuration = shot.endTime - shot.startTime;
     totalDuration+=shotDuration;
   }
-  if(totalDuration>60){
+  if(totalDuration>60 && !speakerPresent){
     const lastShot = selectedShots[selectedShots.length - 1];
     const excessDuration = totalDuration - 60;
     lastShot.endTime = lastShot.endTime - excessDuration;

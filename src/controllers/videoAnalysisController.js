@@ -172,6 +172,7 @@ async function summarizeVideo(req, res) {
   }
 }
 
+
 module.exports = {
   summarizeVideo,
   upload

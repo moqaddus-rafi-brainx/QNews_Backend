@@ -379,7 +379,7 @@ Segment: "${transcript.transcript}"
 Assess relevance and importance. Return JSON:
 {
   "is_relevant": true/false,
-  "relevanceScore": 0-100(how relevant and important is this segment to the main topic)
+  "importanceScore": 0-100(how important is this segment to the main topic)
 }
 `;
 
@@ -397,12 +397,12 @@ Assess relevance and importance. Return JSON:
       if (result.is_relevant) {
         relevantGroup.push({
           ...transcript,
-          relevanceScore: result.relevanceScore,
+          relevanceScore: result.importanceScore,
         });
       } else {
         irrelevantGroup.push({
           ...transcript,
-          relevanceScore: result.relevanceScore,
+          relevanceScore: result.importanceScore,
         });
       }
     } catch (e) {
@@ -415,7 +415,7 @@ Assess relevance and importance. Return JSON:
   }
 
   const mergedContentWithVoiceType=await analyzeSpeakerPresenceForRelevantGroup(relevantGroup,videoBuffer);
-  console.log('mergedContentWithVoiceType:',mergedContentWithVoiceType);
+  console.log('ContentWithVoiceType:',mergedContentWithVoiceType);
   
   // Check if any merged content has a visible speaker with high confidence
   const speakerPresent = mergedContentWithVoiceType.some(content => 
@@ -430,9 +430,9 @@ Assess relevance and importance. Return JSON:
 
     // Break down relevant transcripts into sentences
     //relevantSentences = breakDownRelevantTranscriptsIntoSentences(speechTranscripts, relevantGroup);
-    relevantSentences=await divideTranscriptsIntoSentencesWithAI(relevantGroup,speechTranscripts);
-    console.log('Relevant sentences:', relevantSentences);
-    const result= selectMostRelevantShotsWithin30sGreedy(relevantSentences);
+    //relevantSentences=await divideTranscriptsIntoSentencesWithAI(relevantGroup,speechTranscripts);
+    //console.log('Relevant sentences:', relevantSentences);
+    const result= selectMostRelevantShotsWithin30sGreedy(relevantGroup,speakerPresent);
     selectedShots=result.selectedShots;
     totalDuration=result.totalDuration;
 
@@ -440,7 +440,7 @@ Assess relevance and importance. Return JSON:
   else{
     //Find shots that corresponds to the relevant transcripts
     const relevantShots=findRelevantShotsForTranscripts(relevantGroup,shots);
-    const result= selectMostRelevantShotsWithin30sGreedy(relevantShots);
+    const result= selectMostRelevantShotsWithin30sGreedy(relevantShots,speakerPresent);
     selectedShots=result.selectedShots;
     totalDuration=result.totalDuration;
     console.log('relevantShots:',relevantShots);
@@ -650,6 +650,7 @@ async function divideTranscriptsIntoSentencesWithAI(relevantTranscripts, speechT
     
     if (!matchingSpeechTranscript) {
       // If no matching speech transcript found, add the entire relevant transcript as one sentence
+      console.log('No matching speech transcript found, adding the entire relevant transcript as one sentence');
       sentences.push({
         transcript: relevantTranscript.transcript,
         startTime: relevantTranscript.startTime,
@@ -666,6 +667,7 @@ async function divideTranscriptsIntoSentencesWithAI(relevantTranscripts, speechT
     
     if (relevantWords.length === 0) {
       // If no words found in the time range, add the entire relevant transcript
+      console.log('No words found in the time range, adding the entire relevant transcript as one sentence');
       sentences.push({
         transcript: relevantTranscript.transcript,
         startTime: relevantTranscript.startTime,
@@ -684,7 +686,7 @@ async function divideTranscriptsIntoSentencesWithAI(relevantTranscripts, speechT
     }));
     
     const prompt = `
-You are a transcript analyzer. Your task is to divide the given transcript into natural sentences and provide the start and end times for each sentence.
+You are a transcript analyzer. Your task is to divide the given transcript into smaller meaningful sentences and provide the start and end times for each sentence using words timestamps.
 
 Transcript: "${transcriptText}"
 
@@ -692,11 +694,9 @@ Available words with timestamps:
 ${wordsWithTimestamps.map(w => `"${w.word}" (${w.startTime}s - ${w.endTime}s)`).join('\n')}
 
 Instructions:
-1. Analyze the transcript and identify natural sentence boundaries
-2. For each sentence, find the corresponding words from the available words list
-3. Use the first word's startTime as the sentence's startTime
-4. Use the last word's endTime as the sentence's endTime
-5. Only use words that are actually present in the available words list
+1. For each sentence, find the corresponding words from the available words list
+2. Use the first word's startTime as the sentence's startTime
+3. Use the last word's endTime as the sentence's endTime
 
 Return the result as JSON in this format:
 {
@@ -735,6 +735,7 @@ Important: Only include sentences that can be constructed from the available wor
         });
       } else {
         // Fallback: add the entire transcript as one sentence
+        console.log('No sentences found, adding the entire relevant transcript as one sentence');
         sentences.push({
           transcript: relevantTranscript.transcript,
           startTime: relevantTranscript.startTime,
@@ -745,6 +746,7 @@ Important: Only include sentences that can be constructed from the available wor
     } catch (error) {
       console.error("Failed to divide transcript into sentences with AI:", error);
       // Fallback: add the entire transcript as one sentence
+      console.log('Failed to divide transcript into sentences with AI, adding the entire relevant transcript as one sentence');
       sentences.push({
         transcript: relevantTranscript.transcript,
         startTime: relevantTranscript.startTime,
