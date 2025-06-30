@@ -7,7 +7,7 @@ const { summarizeVideo, upload, summarizeVideo2,summarizeVideo3 } = require('../
  * @desc Analyze and summarize a video file
  * @access Public
  */
-router.post('/analyze-video', upload.single('video'), summarizeVideo);
+router.post('/analyze-video', upload.single('video'), summarizeVideo2);
 router.post('/analyze-video2', upload.single('video'), summarizeVideo2);
 
 module.exports = router; 
