@@ -281,7 +281,7 @@ function mergeCloseTranscripts(transcripts) {
     const current = sortedTranscripts[i];
     const lastInGroup = currentGroup[currentGroup.length - 1];
     
-    // Check if current transcript is within 8 seconds of the last transcript in the group
+    // Check if current transcript is within 3 seconds of the last transcript in the group
     const timeGap = parseFloat(current.startTime) - parseFloat(lastInGroup.endTime);
     
     if (timeGap <= 3) {
@@ -759,6 +759,114 @@ Important: Only include sentences that can be constructed from the available wor
   return sentences;
 }
 
+/**
+ * Adds proper punctuation to text using OpenAI
+ * @param {string} text - Text without proper punctuation
+ * @param {string} language - Language code (optional, for better accuracy)
+ * @returns {Promise<string>} Text with proper punctuation
+ */
+async function addPunctuationToText(text, language = 'auto') {
+  if (!text || typeof text !== 'string') {
+    throw new Error('Invalid text provided');
+  }
+
+  console.log('Adding punctuation to text:', text.substring(0, 100) + '...');
+
+  try {
+    const prompt = `
+You are a professional text editor. Your task is to add proper punctuation to the given text, especially full stops (periods) where sentences naturally end.
+
+Instructions:
+1. Add proper punctuation marks including periods, commas, question marks, exclamation marks
+2. Focus especially on adding full stops (periods) at the end of complete sentences
+3. Maintain the original meaning and flow of the text
+4. Preserve any existing punctuation that is correct
+5. Return ONLY the punctuated text, no additional text or explanations
+
+${language !== 'auto' ? `Note: The text is in ${language} language.` : ''}
+
+Text to punctuate:
+"${text}"
+
+Punctuated text:`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You are a professional text editor. Add proper punctuation to the given text and return only the punctuated text."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.2,
+      max_tokens: 1000
+    });
+
+    const punctuatedText = response.choices[0].message.content.trim();
+    console.log('Punctuation added successfully:', punctuatedText.substring(0, 100) + '...');
+    
+    return punctuatedText;
+
+  } catch (error) {
+    console.error('Error adding punctuation to text:', error);
+    throw new Error(`Punctuation addition failed: ${error.message}`);
+  }
+}
+
+/**
+ * Applies punctuation to transcript segments
+ * @param {Array} transcripts - Array of transcript objects with transcript, startTime, endTime, etc.
+ * @param {string} language - Language code (optional, for better accuracy)
+ * @returns {Promise<Array>} Array of transcript objects with punctuated transcript text
+ */
+async function applyPunctuationToTranscripts(transcripts, language = 'auto') {
+  if (!Array.isArray(transcripts) || transcripts.length === 0) {
+    return [];
+  }
+
+  console.log(`Applying punctuation to ${transcripts.length} transcript segments...`);
+
+  const punctuatedTranscripts = [];
+
+  for (let i = 0; i < transcripts.length; i++) {
+    const transcript = transcripts[i];
+    
+    if (!transcript.transcript || typeof transcript.transcript !== 'string') {
+      console.warn(`Skipping transcript at index ${i}: missing or invalid transcript text`);
+      punctuatedTranscripts.push(transcript);
+      continue;
+    }
+
+    try {
+      console.log(`Processing transcript ${i + 1}/${transcripts.length}...`);
+      
+      // Add punctuation to the transcript text
+      const punctuatedText = await addPunctuationToText(transcript.transcript, language);
+      
+      // Create new transcript object with punctuated text
+      const punctuatedTranscript = {
+        ...transcript,
+        transcript: punctuatedText,
+        originalTranscript: transcript.transcript // Keep original for reference
+      };
+      
+      punctuatedTranscripts.push(punctuatedTranscript);
+      
+    } catch (error) {
+      console.error(`Failed to add punctuation to transcript ${i + 1}:`, error);
+      // Keep original transcript if punctuation fails
+      punctuatedTranscripts.push(transcript);
+    }
+  }
+
+  console.log(`Successfully processed ${punctuatedTranscripts.length} transcript segments`);
+  return punctuatedTranscripts;
+}
+
 module.exports = {
   analyzeMainTopic,
   groupRelatedTranscripts,
@@ -766,5 +874,7 @@ module.exports = {
   findRelevantShotsForTranscripts,
   analyzeSpeakerPresenceForRelevantGroup,
   breakDownRelevantTranscriptsIntoSentences,
-  divideTranscriptsIntoSentencesWithAI
+  divideTranscriptsIntoSentencesWithAI,
+  addPunctuationToText,
+  applyPunctuationToTranscripts
 };

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { summarizeVideo, upload } = require('../controllers/videoAnalysisController');
+const { summarizeVideo, upload, summarizeVideo2,summarizeVideo3 } = require('../controllers/videoAnalysisController');
 
 /**
  * @route POST /api/v2/analyze-video
@@ -8,5 +8,6 @@ const { summarizeVideo, upload } = require('../controllers/videoAnalysisControll
  * @access Public
  */
 router.post('/analyze-video', upload.single('video'), summarizeVideo);
+router.post('/analyze-video2', upload.single('video'), summarizeVideo2);
 
 module.exports = router; 

@@ -8,6 +8,7 @@ const cloudinary = require('../config/cloudinary');
  * @returns {Promise<string>} - The uploaded video URL
  */
 function uploadVideoToCloudinary(buffer, folder = 'my_videos') {
+  console.log("uploading video to cloudinary");
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload_stream(
       {
@@ -39,7 +40,7 @@ function uploadAudioToCloudinary(buffer, folder = 'my_audio') {
       },
       (error, result) => {
         if (error) return reject(error);
-        resolve(result.secure_url);
+        resolve(result);
       }
     ).end(buffer);
   });

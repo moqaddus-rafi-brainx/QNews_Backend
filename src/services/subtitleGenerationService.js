@@ -279,20 +279,45 @@ async function generateSRTFromTranscripts(relevantContent, targetLanguage = 'en'
   try {
     // Extract and flatten transcripts from the nested structure
     const transcripts = [];
-    relevantContent.forEach(item => {
-      if (item.transcripts && Array.isArray(item.transcripts)) {
-        item.transcripts.forEach(transcript => {
-          if (transcript.transcript && transcript.startTime !== undefined && transcript.endTime !== undefined) {
-            transcripts.push({
-              transcript: transcript.transcript,
-              startTime: transcript.startTime,
-              endTime: transcript.endTime,
-              languageCode: transcript.languageCode || 'en'
-            });
-          }
-        });
-      }
-    });
+    
+    // Check if this is mergedGroups structure (array of arrays) or relevantContent structure
+    const isMergedGroupsStructure = relevantContent.length > 0 && Array.isArray(relevantContent[0]);
+    
+    if (isMergedGroupsStructure) {
+      // Handle mergedGroups structure: [[{transcript1}, {transcript2}], [{transcript3}]]
+      console.log('Processing mergedGroups structure');
+      relevantContent.forEach((group, groupIndex) => {
+        if (Array.isArray(group)) {
+          group.forEach(transcript => {
+            if (transcript.transcript && transcript.startTime !== undefined && transcript.endTime !== undefined) {
+              transcripts.push({
+                transcript: transcript.transcript,
+                startTime: transcript.startTime,
+                endTime: transcript.endTime,
+                languageCode: transcript.languageCode || 'en'
+              });
+            }
+          });
+        }
+      });
+    } else {
+      // Handle original relevantContent structure: [{transcripts: [{transcript1}, {transcript2}]}]
+      console.log('Processing relevantContent structure');
+      relevantContent.forEach(item => {
+        if (item.transcripts && Array.isArray(item.transcripts)) {
+          item.transcripts.forEach(transcript => {
+            if (transcript.transcript && transcript.startTime !== undefined && transcript.endTime !== undefined) {
+              transcripts.push({
+                transcript: transcript.transcript,
+                startTime: transcript.startTime,
+                endTime: transcript.endTime,
+                languageCode: transcript.languageCode || 'en'
+              });
+            }
+          });
+        }
+      });
+    }
 
     if (transcripts.length === 0) {
       console.warn('No valid transcripts found in relevantContent');
@@ -330,9 +355,10 @@ async function generateSRTFromTranscripts(relevantContent, targetLanguage = 'en'
 You are a professional subtitle file generator. Your task is to create high-quality English subtitles from the provided transcript segments and their translations.
 
 Instructions:
-1. Translate the text to natural, fluent English
-2. Break long segments into shorter lines for subtitles.
-3. All subtitles should be within the following time range(hh:mm:ss,mmm): (${secondsToSRTTime(transcripts[0].startTime)} - ${secondsToSRTTime(transcripts[transcripts.length - 1].endTime)})
+1. Translate the text to natural, fluent English.
+2. Break long segments into multiple short lines for subtitles.
+3.  Each subtitle must be at max 10-12 words long.
+3. All subtitles should be within the following time range(hh:mm:ss,mmm): (${secondsToSRTTime(transcriptData[0].startTime)} - ${secondsToSRTTime(transcriptData[transcriptData.length - 1].endTime)})
 4. Ensure each subtitle line is synchronized with the corresponding transcript timestamp.
 5. Format the output as a valid SRT file with EXACT formatting.
 
@@ -344,6 +370,9 @@ Subtitle text here
 2
 00:00:04,000 --> 00:00:08,500
 Another subtitle here
+
+3
+....
 
 Transcript segments with timestamps:
 ${transcriptData.map(t => `Segment ${t.id}: "${t.originalText}" \n  Translated text: "${t.translatedText}" \n  (${secondsToSRTTime(t.startTime)} - ${secondsToSRTTime(t.endTime)})`).join('\n')}

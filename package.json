@@ -13,7 +13,7 @@
   "description": "",
   "dependencies": {
     "@google-cloud/video-intelligence": "^6.0.1",
-    "axios": "^1.9.0",
+    "axios": "^1.10.0",
     "cloudinary": "^2.6.1",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
@@ -26,6 +26,7 @@
     "multer": "^2.0.0",
     "openai": "^5.0.1",
     "shotstack-sdk": "^0.2.9",
+    "twelvelabs-js": "^0.4.12",
     "youtube-transcript": "^1.2.1",
     "yt-dlp-wrap": "^2.3.12",
     "ytdl-core": "^4.11.5"

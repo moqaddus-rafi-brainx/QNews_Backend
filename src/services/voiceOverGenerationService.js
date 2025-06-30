@@ -27,8 +27,10 @@ async function convertTextToSpeech(text, voice) {
       );
   
       // Upload audio buffer to Cloudinary instead of saving locally
-      const audioUrl = await uploadAudioToCloudinary(response.data, 'voiceovers');
-      return audioUrl;
+      const result = await uploadAudioToCloudinary(response.data, 'voiceovers');
+      const audioUrl=result.secure_url;
+      const duration=result.duration;
+      return {audioUrl,duration};
     } catch (error) {
       if (error.response?.data) {
         const errorText = Buffer.from(error.response.data).toString('utf-8');
