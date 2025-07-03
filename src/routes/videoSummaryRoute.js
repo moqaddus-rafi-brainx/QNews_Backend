@@ -4,10 +4,10 @@ const { summarizeVideo, upload, summarizeVideo2,summarizeVideo3 } = require('../
 
 /**
  * @route POST /api/v2/analyze-video
- * @desc Analyze and summarize a video file
+ * @desc Analyze and summarize a video url
  * @access Public
  */
-router.post('/analyze-video', upload.single('video'), summarizeVideo2);
+router.post('/analyze-video', summarizeVideo2);
 router.post('/analyze-video2', upload.single('video'), summarizeVideo2);
 
 module.exports = router; 

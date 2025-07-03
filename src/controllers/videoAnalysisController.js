@@ -177,13 +177,14 @@ async function summarizeVideo(req, res) {
 
 async function summarizeVideo2(req, res) {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No video file uploaded' });
-    }
+    // if (!req.file) {
+    //   return res.status(400).json({ error: 'No video file uploaded' });
+    // }
 
     const description = req.body.summary || null;
-    const fileBuffer = req.file.buffer;
-    const url = await uploadVideoToCloudinary(fileBuffer);
+    const url=req.body.videoUrl;
+    //const fileBuffer = req.file.buffer;
+    //const url = await uploadVideoToCloudinary(fileBuffer);
     //const url = `https://res.cloudinary.com/ds0opfsmi/video/upload/v1750942950/my_videos/kgi6pa0lajkyecqiapq3.mp4`
     console.log(url);
   // const url=`https://res.cloudinary.com/ds0opfsmi/video/upload/v1750745841/my_videos/kniuzaombtb1ullbptrh.mp4`;
