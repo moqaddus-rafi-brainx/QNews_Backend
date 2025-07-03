@@ -357,18 +357,22 @@ You are a professional subtitle file generator. Your task is to create high-qual
 Instructions:
 1. Translate the text to natural, fluent English.
 2. Break long segments into multiple short lines for subtitles.
-3.  Each subtitle must be at max 10-12 words long.
-3. All subtitles should be within the following time range(hh:mm:ss,mmm): (${secondsToSRTTime(transcriptData[0].startTime)} - ${secondsToSRTTime(transcriptData[transcriptData.length - 1].endTime)})
-4. Ensure each subtitle line is synchronized with the corresponding transcript timestamp.
-5. Format the output as a valid SRT file with EXACT formatting.
+3. Each subtitle must be at max 15 words long and at min 12 words(if possible).
+4. All subtitles should be within the following time range(hh:mm:ss,mmm): (${secondsToSRTTime(transcriptData[0].startTime)} - ${secondsToSRTTime(transcriptData[transcriptData.length - 1].endTime)})
+5. Ensure each subtitle line is synchronized with the corresponding transcript timestamp.
+6. IMPORTANT: ENSURE that no 2 subtitles have same or overlapping timestamp.
+7. Format the output as a valid SRT file with EXACT formatting.
+8. IMPORTANT: All of the transcripts(in chunks) MUST be included in the SRT file.You may decrease the timespan of each subtitle so that all subtitles can fit in the video timestamp.
+
+All of he subtitles must be shown before the end of the video.
 
 IMPORTANT: Use EXACTLY this SRT format with no extra spaces or characters:
 1
-00:00:01,600 --> 00:00:04,000
+00:00:01,600 --> 00:00:03,000
 Subtitle text here
 
 2
-00:00:04,000 --> 00:00:08,500
+00:00:03,000 --> 00:00:07,500
 Another subtitle here
 
 3

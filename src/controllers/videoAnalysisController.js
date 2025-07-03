@@ -195,8 +195,8 @@ async function summarizeVideo2(req, res) {
 
     // Step 2: Process video annotation using the Google service
     //const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer, audioAnalysis.detectedLanguage);
-      const videoId = await uploadVideoToTwelveLabs(url);
-      console.log(videoId);
+    const videoId = await uploadVideoToTwelveLabs(url);
+    console.log(videoId);
     const result = await getVideoTranscript(videoId,description);
     const transcripts=result.transcripts;
     const {summary,details} = await getVideoDetails(videoId,description);
