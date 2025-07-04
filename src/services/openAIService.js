@@ -12,12 +12,67 @@ const openai = new OpenAI({
 });
 
 /**
+ * Robust fallback function to extract data from malformed AI responses
+ * @param {string} text - The response text from AI
+ * @param {Object} expectedStructure - Expected structure with default values
+ * @returns {Object} - Extracted data with fallback values
+ */
+function extractDataFromMalformedResponse(text, expectedStructure) {
+  const result = { ...expectedStructure };
+  
+  try {
+    // Try to extract key-value pairs using regex
+    const keyValueRegex = /"([^"]+)"\s*:\s*"([^"]+)"/g;
+    let match;
+    
+    while ((match = keyValueRegex.exec(text)) !== null) {
+      const key = match[1];
+      const value = match[2];
+      
+      if (key in expectedStructure) {
+        // Try to convert value to appropriate type
+        if (typeof expectedStructure[key] === 'boolean') {
+          result[key] = value.toLowerCase() === 'true';
+        } else if (typeof expectedStructure[key] === 'number') {
+          result[key] = parseFloat(value) || expectedStructure[key];
+        } else if (Array.isArray(expectedStructure[key])) {
+          // For arrays, try to find array-like content
+          const arrayMatch = text.match(new RegExp(`"${key}"\\s*:\\s*\\[(.*?)\\]`, 's'));
+          if (arrayMatch) {
+            try {
+              result[key] = JSON.parse(`[${arrayMatch[1]}]`);
+            } catch (e) {
+              result[key] = expectedStructure[key];
+            }
+          }
+        } else {
+          result[key] = value;
+        }
+      }
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Failed to extract data from malformed response:', error);
+    return expectedStructure;
+  }
+}
+
+/**
  * Utility function to parse JSON from OpenAI responses that may be wrapped in markdown code blocks
  * @param {string} text - The response text from OpenAI
+ * @param {Object} fallbackStructure - Optional fallback structure if parsing fails
  * @returns {Object} - Parsed JSON object
- * @throws {Error} - If JSON parsing fails
+ * @throws {Error} - If JSON parsing fails and no fallback is provided
  */
-function parseOpenAIResponse(text) {
+function parseOpenAIResponse(text, fallbackStructure = null) {
+  if (!text || typeof text !== 'string') {
+    if (fallbackStructure) {
+      return fallbackStructure;
+    }
+    throw new Error('Invalid input: text must be a non-empty string');
+  }
+
   // Handle responses wrapped in markdown code blocks
   let jsonText = text;
   
@@ -28,13 +83,64 @@ function parseOpenAIResponse(text) {
     jsonText = text.replace(/```\s*/, '').replace(/\s*```/, '');
   }
   
+  // Clean up common formatting issues
+  jsonText = jsonText
+    .replace(/\n/g, ' ')
+    .replace(/\r/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
   // Find the first JSON object
   const jsonStart = jsonText.indexOf('{');
-  if (jsonStart === -1) {
-    throw new Error('No JSON object found in response');
+  const jsonEnd = jsonText.lastIndexOf('}');
+  
+  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+    // Try to find array format
+    const arrayStart = jsonText.indexOf('[');
+    const arrayEnd = jsonText.lastIndexOf(']');
+    
+    if (arrayStart === -1 || arrayEnd === -1 || arrayEnd <= arrayStart) {
+      if (fallbackStructure) {
+        console.warn('No JSON found in response, using fallback structure');
+        return extractDataFromMalformedResponse(text, fallbackStructure);
+      }
+      throw new Error('No JSON object or array found in response');
+    }
+    
+    // Extract array content
+    const arrayContent = jsonText.slice(arrayStart, arrayEnd + 1);
+    return JSON.parse(arrayContent);
   }
   
-  return JSON.parse(jsonText.slice(jsonStart));
+  // Extract JSON object content
+  const jsonContent = jsonText.slice(jsonStart, jsonEnd + 1);
+  
+  try {
+    return JSON.parse(jsonContent);
+  } catch (parseError) {
+    // Try to fix common JSON issues
+    let fixedContent = jsonContent
+      .replace(/(\d+)s/g, '$1') // Remove 's' suffix from numbers
+      .replace(/''/g, '"') // Replace double single quotes with double quotes
+      .replace(/'/g, '"') // Replace single quotes with double quotes
+      .replace(/\.\./g, '.') // Replace double dots with single dot
+      .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
+      .replace(/([^"\\])\\([^"\\])/g, '$1\\\\$2'); // Fix escape sequences
+    
+    try {
+      return JSON.parse(fixedContent);
+    } catch (secondError) {
+      console.error('Original JSON content:', jsonContent);
+      console.error('Fixed JSON content:', fixedContent);
+      
+      if (fallbackStructure) {
+        console.warn('JSON parsing failed, using fallback structure');
+        return extractDataFromMalformedResponse(text, fallbackStructure);
+      }
+      
+      throw new Error(`Failed to parse JSON after cleaning: ${secondError.message}`);
+    }
+  }
 }
 
 async function extractFramesForTimestamp(videoBuffer, startTime, endTime, frameRate = 0.25, maxFrames = 3) {
@@ -868,6 +974,7 @@ async function applyPunctuationToTranscripts(transcripts, language = 'auto') {
 }
 
 module.exports = {
+  parseOpenAIResponse,
   analyzeMainTopic,
   groupRelatedTranscripts,
   mergeCloseTranscripts,

@@ -3,6 +3,9 @@ const OpenAI = require('openai');
 const axios = require('axios');
 require('dotenv').config();
 
+// Import the parseOpenAIResponse function
+const { parseOpenAIResponse } = require('./openAIService');
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -85,65 +88,49 @@ const uploadVideoToTwelveLabs = async (fileBufferOrUrl) => {
     return task.videoId;
 }
 
-const getVideoDetails = async (videoId,description) => {
-    const summary = await client.summarize(videoId, "summary", `Summarize this video into 4-5 lines of news article, ${description?" keeping in mind the description of the video: "+description:""}`);
+const getVideoDetails = async (videoId, description) => {
+    const summary = await client.summarize(videoId, "summary", `Summarize this video into 4-5 lines of news article, ${description ? " keeping in mind the description of the video: " + description : ""}`);
     const result = await client.analyze(
         videoId,
         `For this video, provide the following information in Json format:
         -Main topic of the video(1 line).
-        -Language of the video.
+        -Language being spoken in the video e.g. for English give "en-US", for hindi give "hi-IN", etc.
         -News category of the video.
 
         Providing description of the video for context: ${description}
 
         
-        Return the result in JSON format:
+        Important:ALWAYS Return the result in the EXACT JSON format:
          {
          mainTopic: "text",
-         language: "en-us" or "Unknown",
+         language: "en-US" or "Unknown",
          category: "text"
          }
 `,
         0.4,
-      );
+    );
     
-    // Parse the result.data safely
-    let parsedDetails = {
+    // Define fallback structure
+    const fallbackStructure = {
         mainTopic: "Unknown topic",
         language: "Unknown",
         category: "other"
     };
     
+    // Parse the result.data safely
+    let parsedDetails = fallbackStructure;
+    
     if (result.data) {
         try {
-            // Try to parse as JSON
-            if (typeof result.data === 'string') {
-                parsedDetails = JSON.parse(result.data);
-            } else if (typeof result.data === 'object') {
-                parsedDetails = result.data;
-            }
+            parsedDetails = parseOpenAIResponse(result.data, fallbackStructure);
         } catch (parseError) {
             console.error('Error parsing video details JSON:', parseError);
             console.error('Raw details data:', result.data);
-            
-            // Try cleaning the JSON
-            try {
-                const cleanedData = result.data
-                    .replace(/\n/g, ' ')
-                    .replace(/\r/g, '')
-                    .replace(/''/g, '"')
-                    .replace(/'/g, '"')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-                parsedDetails = JSON.parse(cleanedData);
-            } catch (secondError) {
-                console.error('Failed to parse even after cleaning:', secondError);
-                // Keep default values
-            }
+            // Keep default values
         }
     }
     
-    return {details: parsedDetails, summary: summary.summary};
+    return { details: parsedDetails, summary: summary.summary };
 }
 
 const getVideoHighlights = async (videoId,description) => {
@@ -164,10 +151,44 @@ return {
 }
 }
 
+const getVideoTranscript2 = async (videoId, description) => {
+    const result = await client.analyze(
+        videoId,
+        `For this video, provide the following information in Json format: 
+        1.The transcript segments of the video with punctuation marks and timestamps for each segment in seconds ONLY IF the whole transcript gives meaningful information about the video content, otherwise return empty array [].
+        2.Importance score (1-100) (How important this segment is to be kept in the summarized version of the video).
+        3.Does the video contain a visible speaker or is it a voiceover? Respond with true if a person is visibly speaking (i.e., their lip movements match the audio), otherwise respond with false.
+        4.Language code for the language of the video like "en-US" or "Unknown" if not detected.
+        IMPORTANT: the language code MUST be in the same format.
+        IMPORTANT:Return the result in EXACT JSON format:
+         {
+         transcripts:[{transcript: 'text', startTime: number in seconds, endTime: number in seconds}] or []
+         }
+        `,
+        0.4,
+    );
+    
+    console.log(`Result ID: ${result.id}`);
+    console.log(`Generated text: ${result.data}`);
+    if (result.usage !== undefined) {
+        console.log(`Output tokens: ${result.usage.outputTokens}`)
+    };
 
+    // Define fallback structure
+    const fallbackStructure = {
+        transcripts: []
+    };
+    
+    try {
+        return parseOpenAIResponse(result.data, fallbackStructure);
+    } catch (error) {
+        console.error('Failed to parse AI response:', error.message);
+        console.error('Raw response data:', result.data);
+        return fallbackStructure;
+    }
+}
 
-
-const getVideoTranscript = async (videoId,description) => {
+const getVideoTranscript = async (videoId, description) => {
     const result = await client.analyze(
         videoId,
         `For this video, provide the following information in Json format: 
@@ -176,9 +197,10 @@ const getVideoTranscript = async (videoId,description) => {
           - Do NOT include segments that are too short (less than 5 words) or meaningless.
           - If no meaningful transcript exists, return empty array [].
         2.Importance score (1-100) (How important this segment is to be kept in the summarized version of the video).
-        3.Is this a voice over or speaker present in the video(true/false).Look carefully for the moving lips of a person matching transcript.
-        4.Language spoken in the video.Language code like "en-us" or "Unknown" if not detected.
+        3.Does the video contain a visible speaker or is it a voiceover? Respond with true if a person is visibly speaking (i.e., their lip movements match the audio), otherwise respond with false.
+        4.Language code for the language of the video like "en-US" or "Unknown" if not detected.
         5.English translation of each transcript segment.
+        IMPORTANT: the language code MUST be in the same format.
         Return the result in EXACT JSON format:
          {
          is_speaker: true/false, 
@@ -188,72 +210,32 @@ const getVideoTranscript = async (videoId,description) => {
          endTime: number in seconds,
           importanceScore: number}
           ] or []
-         language: "en-us" or "Unknown"
+         language: "en-US" or "Unknown"
          }
 `,
         0.4,
-      );
-      console.log(`Result ID: ${result.id}`);
-      console.log(`Generated text: ${result.data}`);
-      if (result.usage !== undefined) {
-          console.log(`Output tokens: ${result.usage.outputTokens}`)
-      };
-      
-      // Parse the JSON string response to return actual object
-      try {
-          const parsedData = JSON.parse(result.data);
-          return parsedData;
-      } catch (error) {
-          console.error('Error parsing JSON response:', error);
-          console.error('Raw response data:', result.data);
-          // Try to clean up common JSON issues
-          try {
-              const cleanedData = result.data
-                  .replace(/\n/g, ' ')
-                  .replace(/\r/g, '')
-                  .replace(/(\d+)s/g, '$1') // Remove 's' suffix from numbers
-                  .replace(/''/g, '"') // Replace double single quotes with double quotes
-                  .replace(/'/g, '"') // Replace single quotes with double quotes
-                  .replace(/\.\./g, '.') // Replace double dots with single dot
-                  .replace(/\s+/g, ' ') // Normalize whitespace
-                  .trim();
-              const parsedData = JSON.parse(cleanedData);
-              return parsedData;
-          } catch (secondError) {
-              console.error('Failed to parse even after cleaning:', secondError);
-              // Try more aggressive cleaning
-              try {
-                  let aggressiveCleaned = result.data
-                      .replace(/\n/g, ' ')
-                      .replace(/\r/g, '')
-                      .replace(/(\d+)s/g, '$1')
-                      .replace(/''/g, '"')
-                      .replace(/'/g, '"')
-                      .replace(/\.\./g, '.')
-                      .replace(/\s+/g, ' ')
-                      .trim();
-                  
-                  // Remove any trailing commas before closing braces/brackets
-                  aggressiveCleaned = aggressiveCleaned.replace(/,(\s*[}\]])/g, '$1');
-                  
-                  // Fix common JSON syntax errors
-                  aggressiveCleaned = aggressiveCleaned.replace(/([^"\\])\\([^"\\])/g, '$1\\\\$2');
-                  
-                  const parsedData = JSON.parse(aggressiveCleaned);
-                  return parsedData;
-              } catch (thirdError) {
-                  console.error('Failed to parse even after aggressive cleaning:', thirdError);
-                  console.error('Aggressively cleaned data:', aggressiveCleaned);
-                  
-                  // Return a safe fallback response
-                  return {
-                      is_speaker: false,
-                      transcripts: [],
-                      language: "Unknown"
-                  };
-              }
-          }
-      }
+    );
+    
+    console.log(`Result ID: ${result.id}`);
+    console.log(`Generated text: ${result.data}`);
+    if (result.usage !== undefined) {
+        console.log(`Output tokens: ${result.usage.outputTokens}`)
+    };
+    
+    // Define fallback structure
+    const fallbackStructure = {
+        is_speaker: false,
+        transcripts: [],
+        language: "Unknown"
+    };
+    
+    try {
+        return parseOpenAIResponse(result.data, fallbackStructure);
+    } catch (error) {
+        console.error('Failed to parse AI response:', error.message);
+        console.error('Raw response data:', result.data);
+        return fallbackStructure;
+    }
 }
 
 const getImportantTrancriptChunks = async (videoId,description) => {
@@ -325,10 +307,13 @@ const selectMostImportantHighlights = (highlights) => {
 
     selectedHighlights.push(highlights[0]);
     let totalDuration = highlights[0].end - highlights[0].start;
+
     for(const highlight of highlights){
       if(highlight===highlights[0]) continue;
+
       let highlightDuration = highlight.end - highlight.start;
       if(highlightDuration<=2) continue;
+      
       if(totalDuration<25 && totalDuration+highlightDuration>=40 ){
         const remainingDuration = totalDuration+highlightDuration-40;
         highlight.end = highlight.end - remainingDuration;
@@ -449,4 +434,5 @@ module.exports = {
     generateVoiceOverForVideo,
     getSpeechSegments,
     selectTranscriptsByImportance,
+    getVideoTranscript2
 }
