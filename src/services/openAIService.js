@@ -735,6 +735,8 @@ function breakDownRelevantTranscriptsIntoSentences(speechTranscripts, relevantGr
  * @param {Array} speechTranscripts - Array of speech transcript objects with words and timestamps
  * @returns {Promise<Array>} Array of sentence objects with transcript, startTime, endTime
  */
+
+
 async function divideTranscriptsIntoSentencesWithAI(relevantTranscripts, speechTranscripts) {
   const sentences = [];
   
@@ -761,48 +763,32 @@ async function divideTranscriptsIntoSentencesWithAI(relevantTranscripts, speechT
         transcript: relevantTranscript.transcript,
         startTime: relevantTranscript.startTime,
         endTime: relevantTranscript.endTime,
-        relevanceScore: relevantTranscript.relevanceScore || 0
-      });
-      continue;
-    }
-    
-    // Find words that fall within the relevant transcript time range
-    const relevantWords = matchingSpeechTranscript.words.filter(word => {
-      return word.startTime >= relevantStartTime && word.endTime <= relevantEndTime;
-    });
-    
-    if (relevantWords.length === 0) {
-      // If no words found in the time range, add the entire relevant transcript
-      console.log('No words found in the time range, adding the entire relevant transcript as one sentence');
-      sentences.push({
-        transcript: relevantTranscript.transcript,
-        startTime: relevantTranscript.startTime,
-        endTime: relevantTranscript.endTime,
-        relevanceScore: relevantTranscript.relevanceScore || 0
+        relevanceScore: relevantTranscript.relevanceScore || 0,
+        words: [] // Empty words array since no matching transcript found
       });
       continue;
     }
     
     // Prepare the transcript text and words for AI analysis
     const transcriptText = relevantTranscript.transcript;
-    const wordsWithTimestamps = relevantWords.map(word => ({
+    const wordsWithTimestamps = matchingSpeechTranscript.words.map(word => ({
       word: word.word,
       startTime: word.startTime,
       endTime: word.endTime
     }));
+    const systemPrompt=`
+    You are a transcript analyzer. Your task is to divide the given transcript into smaller meaningful sentences based in the meanings and the stops in snetences(like full stops).
+    e.g. "My name is a bot. I am a robot." should be divided into two sentences: "My name is a bot." and "I am a robot."
+    For "My name is a bot" sentence, the startTime will be the startTime of the first word "My" and the endTime will be the endTime of the last word "bot".
+    The startTime and endTime of words will be provided in the wordsWithTimestamps array.You just have to find the words.
     
-    const prompt = `
-You are a transcript analyzer. Your task is to divide the given transcript into smaller meaningful sentences and provide the start and end times for each sentence using words timestamps.
+    `;
+    const prompt = `Break this transcript into smaller meaningful sentences based in the meanings and the stops in sentences(like full stops).Return these sentences with accurate timestamp for each resultant sentence.
 
 Transcript: "${transcriptText}"
 
-Available words with timestamps:
+Words of this transcript with timestamps:
 ${wordsWithTimestamps.map(w => `"${w.word}" (${w.startTime}s - ${w.endTime}s)`).join('\n')}
-
-Instructions:
-1. For each sentence, find the corresponding words from the available words list
-2. Use the first word's startTime as the sentence's startTime
-3. Use the last word's endTime as the sentence's endTime
 
 Return the result as JSON in this format:
 {
@@ -810,19 +796,19 @@ Return the result as JSON in this format:
     {
       "sentence": "The actual sentence text",
       "startTime": 12.5,
-      "endTime": 15.2,
-      "words": ["word1", "word2", "word3"]
+      "endTime": 15.2 
     }
   ]
 }
-
-Important: Only include sentences that can be constructed from the available words. If the transcript cannot be properly divided into sentences, return the entire transcript as one sentence.
 `;
 
     try {
       const response = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: prompt }],
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: prompt }
+        ],
         temperature: 0.3
       });
 
@@ -830,34 +816,74 @@ Important: Only include sentences that can be constructed from the available wor
       const result = parseOpenAIResponse(text);
       
       if (result.sentences && Array.isArray(result.sentences)) {
-        // Add each sentence to the results
+        // Add each sentence to the results with words array
         result.sentences.forEach(sentenceData => {
+          const sentenceStartTime = parseFloat(sentenceData.startTime);
+          const sentenceEndTime = parseFloat(sentenceData.endTime);
+          
+          // Find words that fall within this sentence's time range
+          const sentenceWords = matchingSpeechTranscript.words.filter(word => {
+            const wordStartTime = parseFloat(word.startTime);
+            const wordEndTime = parseFloat(word.endTime);
+            
+            // Check if word overlaps with sentence time range
+            return (wordStartTime >= sentenceStartTime && wordEndTime <= sentenceEndTime)
+          });
+
+          // Sort words by start time to ensure proper order
+          sentenceWords.sort((a, b) => parseFloat(a.startTime) - parseFloat(b.startTime));
+
           sentences.push({
             transcript: sentenceData.sentence,
             startTime: sentenceData.startTime,
             endTime: sentenceData.endTime,
-            relevanceScore: relevantTranscript.relevanceScore || 0
+            relevanceScore: relevantTranscript.relevanceScore || 0,
+            words: sentenceWords // Add the words array to each sentence
           });
         });
       } else {
         // Fallback: add the entire transcript as one sentence
         console.log('No sentences found, adding the entire relevant transcript as one sentence');
+        
+        // Find words for the entire transcript
+        const sentenceWords = matchingSpeechTranscript.words.filter(word => {
+          const wordStartTime = parseFloat(word.startTime);
+          const wordEndTime = parseFloat(word.endTime);
+          
+          return (wordEndTime >= relevantStartTime && wordEndTime <= relevantEndTime) 
+        });
+
+        sentenceWords.sort((a, b) => parseFloat(a.startTime) - parseFloat(b.startTime));
+
         sentences.push({
           transcript: relevantTranscript.transcript,
           startTime: relevantTranscript.startTime,
           endTime: relevantTranscript.endTime,
-          relevanceScore: relevantTranscript.relevanceScore || 0
+          relevanceScore: relevantTranscript.relevanceScore || 0,
+          words: sentenceWords
         });
       }
     } catch (error) {
       console.error("Failed to divide transcript into sentences with AI:", error);
       // Fallback: add the entire transcript as one sentence
       console.log('Failed to divide transcript into sentences with AI, adding the entire relevant transcript as one sentence');
+      
+      // Find words for the entire transcript
+      const sentenceWords = matchingSpeechTranscript.words.filter(word => {
+        const wordStartTime = parseFloat(word.startTime);
+        const wordEndTime = parseFloat(word.endTime);
+        
+        return (wordEndTime >= relevantStartTime && wordEndTime <= relevantEndTime) 
+      });
+
+      sentenceWords.sort((a, b) => parseFloat(a.startTime) - parseFloat(b.startTime));
+
       sentences.push({
         transcript: relevantTranscript.transcript,
         startTime: relevantTranscript.startTime,
         endTime: relevantTranscript.endTime,
-        relevanceScore: relevantTranscript.relevanceScore || 0
+        relevanceScore: relevantTranscript.relevanceScore || 0,
+        words: sentenceWords
       });
     }
   }
@@ -897,7 +923,7 @@ Text to punctuate:
 Punctuated text:`;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         {
           role: "system",
@@ -973,6 +999,389 @@ async function applyPunctuationToTranscripts(transcripts, language = 'auto') {
   return punctuatedTranscripts;
 }
 
+/**
+ * Analyzes the importance score of individual sentences based on relevance to video description and topic
+ * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime
+ * @param {string} videoDescription - Description of the video
+ * @param {string} mainTopic - Main topic of the video
+ * @param {string} category - News category of the video
+ * @returns {Promise<Array>} Array of sentence objects with importance scores
+ */
+async function analyzeSentenceImportance(sentences, videoDescription, mainTopic, category) {
+  if (!Array.isArray(sentences) || sentences.length === 0) {
+    return [];
+  }
+
+  console.log(`Analyzing importance scores for ${sentences.length} sentences...`);
+
+  const sentencesWithImportance = [];
+
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
+    
+    if (!sentence.transcript || typeof sentence.transcript !== 'string') {
+      console.warn(`Skipping sentence at index ${i}: missing or invalid transcript text`);
+      sentencesWithImportance.push({
+        ...sentence,
+        importanceScore: 0
+      });
+      continue;
+    }
+
+    try {
+      console.log(`Processing sentence ${i + 1}/${sentences.length}...`);
+      
+      const prompt = `Evaluate this sentence to find out how important and relevant is the info this sentence provides about the video.
+
+Video Context:
+- Main Topic: "${mainTopic}"
+- Category: "${category}"
+- Description: "${videoDescription || 'No description provided'}"
+
+Sentence to analyze: "${sentence.transcript}"
+
+Return result as JSON in this format:
+{
+  "importanceScore": 0-100,
+  "reasoning": "Brief explanation of why this score was given"
+}
+`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "You are an expert content analyst. Evaluate sentence importance based on relevance to video topic and description.This information will be used for summarizing the video to keep important info only."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 200
+      });
+
+      const text = response.choices[0].message.content;
+      
+      try {
+        const result = parseOpenAIResponse(text);
+        
+        // Validate the importance score
+        let importanceScore = result.importanceScore;
+        if (typeof importanceScore !== 'number' || importanceScore < 0 || importanceScore > 100) {
+          console.warn(`Invalid importance score for sentence ${i + 1}, using fallback score`);
+          importanceScore = 50; // Default fallback score
+        }
+        
+        sentencesWithImportance.push({
+          ...sentence,
+          importanceScore: Math.round(importanceScore),
+          importanceReasoning: result.reasoning || "No reasoning provided"
+        });
+        
+      } catch (parseError) {
+        console.error(`Failed to parse OpenAI response for sentence ${i + 1}:`, text);
+        // Fallback: assign a default score based on basic relevance check
+        const fallbackScore = sentence.transcript.toLowerCase().includes(mainTopic.toLowerCase()) ? 60 : 30;
+        sentencesWithImportance.push({
+          ...sentence,
+          importanceScore: fallbackScore,
+          importanceReasoning: "Fallback score due to parsing error"
+        });
+      }
+      
+    } catch (error) {
+      console.error(`Failed to analyze importance for sentence ${i + 1}:`, error);
+      // Keep original sentence with default score if analysis fails
+      sentencesWithImportance.push({
+        ...sentence,
+        importanceScore: 50,
+        importanceReasoning: "Analysis failed"
+      });
+    }
+  }
+
+  console.log(`Successfully analyzed importance scores for ${sentencesWithImportance.length} sentences`);
+  return sentencesWithImportance;
+}
+
+/**
+ * Adds words array to each sentence based on timestamp matching
+ * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime
+ * @param {Array} wordsList - Array of word objects with word, startTime, endTime
+ * @returns {Array} Array of sentence objects with added words array
+ */
+function addWordsToSentences(sentences, wordsList) {
+  if (!Array.isArray(sentences) || sentences.length === 0) {
+    return [];
+  }
+
+  if (!Array.isArray(wordsList) || wordsList.length === 0) {
+    console.warn('No words list provided, returning sentences without words array');
+    return sentences.map(sentence => ({
+      ...sentence,
+      words: []
+    }));
+  }
+
+  console.log(`Adding words to ${sentences.length} sentences...`);
+
+  const sentencesWithWords = sentences.map(sentence => {
+    const sentenceStartTime = parseFloat(sentence.startTime);
+    const sentenceEndTime = parseFloat(sentence.endTime);
+
+    // Find words that fall within this sentence's time range
+    const sentenceWords = wordsList.filter(word => {
+      const wordStartTime = parseFloat(word.startTime);
+      const wordEndTime = parseFloat(word.endTime);
+      
+      // Check if word overlaps with sentence time range
+      return (wordStartTime >= sentenceStartTime && wordStartTime <= sentenceEndTime) ||
+             (wordEndTime >= sentenceStartTime && wordEndTime <= sentenceEndTime) ||
+             (wordStartTime <= sentenceStartTime && wordEndTime >= sentenceEndTime);
+    });
+
+    // Sort words by start time to ensure proper order
+    sentenceWords.sort((a, b) => parseFloat(a.startTime) - parseFloat(b.startTime));
+
+    return {
+      ...sentence,
+      words: sentenceWords
+    };
+  });
+
+  console.log(`Successfully added words to ${sentencesWithWords.length} sentences`);
+  return sentencesWithWords;
+}
+
+/**
+ * Creates subtitle chunks from sentences by breaking them into 10-12 word segments
+ * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime, words array
+ * @returns {Array} Array of subtitle chunk objects with transcript, startTime, endTime (mapped to 0+)
+ */
+function createSubtitleChunks(sentences) {
+  if (!Array.isArray(sentences) || sentences.length === 0) {
+    return [];
+  }
+
+  console.log(`Creating subtitle chunks from ${sentences.length} sentences...`);
+
+  const subtitleChunks = [];
+  let currentTimeOffset = 0; // Tracks the mapped time starting from 0
+
+  for (const sentence of sentences) {
+    const sentenceStartTime = parseFloat(sentence.startTime);
+    const sentenceEndTime = parseFloat(sentence.endTime);
+    
+    // Use the words array that's already present in the sentence object
+    let sentenceWords = sentence.words || [];
+
+    if (sentenceWords.length === 0) {
+      // If no words found, create a single chunk for the sentence
+      const chunkDuration = sentenceEndTime - sentenceStartTime;
+      subtitleChunks.push({
+        transcript: sentence.transcript,
+        startTime: currentTimeOffset,
+        endTime: currentTimeOffset + chunkDuration,
+        originalStartTime: sentenceStartTime,
+        originalEndTime: sentenceEndTime,
+        wordCount: sentence.transcript.split(' ').length
+      });
+      currentTimeOffset += chunkDuration;
+      continue;
+    }
+
+    const sentenceText = sentence.transcript;
+    const words = sentenceText.split(' ').filter(word => word.trim().length > 0);
+    
+    const chunks = [];
+    const chunkSize = 11; // Target 11 words per chunk
+    
+    for (let i = 0; i < words.length; i += chunkSize) {
+      const chunkWords = words.slice(i, i + chunkSize);
+      chunks.push(chunkWords.join(' '));
+    }
+
+    // Match each chunk to corresponding words
+    let wordIndex = 0;
+    
+    for (const chunkText of chunks) {
+      const chunkWordCount = chunkText.split(' ').length;
+      
+      // Find the next set of words that match this chunk
+      const chunkWords = [];
+      let wordsFound = 0;
+      
+      while (wordIndex < sentenceWords.length && wordsFound < chunkWordCount) {
+        chunkWords.push(sentenceWords[wordIndex]);
+        wordsFound++;
+        wordIndex++;
+      }
+
+      if (chunkWords.length === 0) {
+        // Fallback: use estimated duration based on word count
+        const estimatedDuration = chunkWordCount * 0.5; // Assume 0.5 seconds per word
+        subtitleChunks.push({
+          transcript: chunkText,
+          startTime: currentTimeOffset,
+          endTime: currentTimeOffset + estimatedDuration,
+          originalStartTime: sentenceStartTime,
+          originalEndTime: sentenceEndTime,
+          wordCount: chunkWordCount
+        });
+        currentTimeOffset += estimatedDuration;
+        continue;
+      }
+
+      // Calculate chunk timestamps from the words
+      const chunkStartTime = parseFloat(chunkWords[0].startTime);
+      const chunkEndTime = parseFloat(chunkWords[chunkWords.length - 1].endTime);
+      const chunkDuration = chunkEndTime - chunkStartTime;
+
+      // Map to sequential time starting from 0
+      subtitleChunks.push({
+        transcript: chunkText,
+        startTime: currentTimeOffset,
+        endTime: currentTimeOffset + chunkDuration,
+        originalStartTime: chunkStartTime,
+        originalEndTime: chunkEndTime,
+        wordCount: chunkWordCount
+      });
+
+      currentTimeOffset += chunkDuration;
+    }
+  }
+
+  console.log(`Created ${subtitleChunks.length} subtitle chunks`);
+  return subtitleChunks;
+}
+
+/**
+ * Creates subtitle chunks with more precise word matching
+ * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime
+ * @param {Array} wordsList - Array of word objects with word, startTime, endTime
+ * @returns {Array} Array of subtitle chunk objects with transcript, startTime, endTime (mapped to 0+)
+ */
+function createSubtitleChunksWithPreciseMatching(sentences, wordsList) {
+  if (!Array.isArray(sentences) || sentences.length === 0) {
+    return [];
+  }
+
+  if (!Array.isArray(wordsList) || wordsList.length === 0) {
+    console.warn('No words list provided, returning original sentences as chunks');
+    return sentences.map((sentence, index) => ({
+      transcript: sentence.transcript,
+      startTime: index * 5,
+      endTime: (index + 1) * 5,
+      originalStartTime: sentence.startTime,
+      originalEndTime: sentence.endTime
+    }));
+  }
+
+  console.log(`Creating subtitle chunks with precise matching from ${sentences.length} sentences...`);
+
+  const subtitleChunks = [];
+  let currentTimeOffset = 0;
+
+  for (const sentence of sentences) {
+    const sentenceStartTime = parseFloat(sentence.startTime);
+    const sentenceEndTime = parseFloat(sentence.endTime);
+
+    // Find words within sentence time range
+    const sentenceWords = wordsList.filter(word => {
+      const wordStartTime = parseFloat(word.startTime);
+      const wordEndTime = parseFloat(word.endTime);
+      
+      return (wordStartTime >= sentenceStartTime && wordStartTime <= sentenceEndTime) ||
+             (wordEndTime >= sentenceStartTime && wordEndTime <= sentenceEndTime) ||
+             (wordStartTime <= sentenceStartTime && wordEndTime >= sentenceEndTime);
+    });
+
+    if (sentenceWords.length === 0) {
+      // Fallback for sentences without matching words
+      const chunkDuration = sentenceEndTime - sentenceStartTime;
+      subtitleChunks.push({
+        transcript: sentence.transcript,
+        startTime: currentTimeOffset,
+        endTime: currentTimeOffset + chunkDuration,
+        originalStartTime: sentenceStartTime,
+        originalEndTime: sentenceEndTime,
+        wordCount: sentence.transcript.split(' ').length
+      });
+      currentTimeOffset += chunkDuration;
+      continue;
+    }
+
+    // Sort words by start time
+    sentenceWords.sort((a, b) => parseFloat(a.startTime) - parseFloat(b.startTime));
+
+    // Break sentence into chunks of 10-12 words
+    const sentenceText = sentence.transcript;
+    const words = sentenceText.split(' ').filter(word => word.trim().length > 0);
+    
+    const chunks = [];
+    const chunkSize = 11; // Target 11 words per chunk
+    
+    for (let i = 0; i < words.length; i += chunkSize) {
+      const chunkWords = words.slice(i, i + chunkSize);
+      chunks.push(chunkWords.join(' '));
+    }
+
+    // Match each chunk to corresponding words
+    let wordIndex = 0;
+    
+    for (const chunkText of chunks) {
+      const chunkWordCount = chunkText.split(' ').length;
+      
+      // Find the next set of words that match this chunk
+      const chunkWords = [];
+      let wordsFound = 0;
+      
+      while (wordIndex < sentenceWords.length && wordsFound < chunkWordCount) {
+        chunkWords.push(sentenceWords[wordIndex]);
+        wordsFound++;
+        wordIndex++;
+      }
+
+      if (chunkWords.length === 0) {
+        // Fallback: use estimated duration
+        const estimatedDuration = chunkWordCount * 0.5;
+        subtitleChunks.push({
+          transcript: chunkText,
+          startTime: currentTimeOffset,
+          endTime: currentTimeOffset + estimatedDuration,
+          originalStartTime: sentenceStartTime,
+          originalEndTime: sentenceEndTime,
+          wordCount: chunkWordCount
+        });
+        currentTimeOffset += estimatedDuration;
+        continue;
+      }
+
+      // Calculate timestamps from matched words
+      const chunkStartTime = parseFloat(chunkWords[0].startTime);
+      const chunkEndTime = parseFloat(chunkWords[chunkWords.length - 1].endTime);
+      const chunkDuration = chunkEndTime - chunkStartTime;
+
+      subtitleChunks.push({
+        transcript: chunkText,
+        startTime: currentTimeOffset,
+        endTime: currentTimeOffset + chunkDuration,
+        originalStartTime: chunkStartTime,
+        originalEndTime: chunkEndTime,
+        wordCount: chunkWordCount
+      });
+
+      currentTimeOffset += chunkDuration;
+    }
+  }
+
+  console.log(`Created ${subtitleChunks.length} subtitle chunks with precise matching`);
+  return subtitleChunks;
+}
+
 module.exports = {
   parseOpenAIResponse,
   analyzeMainTopic,
@@ -983,5 +1392,9 @@ module.exports = {
   breakDownRelevantTranscriptsIntoSentences,
   divideTranscriptsIntoSentencesWithAI,
   addPunctuationToText,
-  applyPunctuationToTranscripts
+  applyPunctuationToTranscripts,
+  analyzeSentenceImportance,
+  addWordsToSentences,
+  createSubtitleChunks,
+  createSubtitleChunksWithPreciseMatching
 };

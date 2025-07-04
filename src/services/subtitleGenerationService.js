@@ -38,6 +38,139 @@ async function downloadVideoFromUrl(videoUrl) {
 }
 
 /**
+ * Generates SRT file content from subtitle chunks
+ * @param {Array} subtitleChunks - Array of objects: {transcript, startTime, endTime}
+ * @returns {Promise<string>} SRT file content as a string
+ */
+async function generateSRTFromChunks(subtitleChunks) {
+  if (!Array.isArray(subtitleChunks) || subtitleChunks.length === 0) return '';
+
+  // Helper to convert seconds to SRT time format
+  function secondsToSRTTime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    const milliseconds = Math.floor((seconds % 1) * 1000);
+    return `${hours.toString().padStart(2, '0')}:${minutes
+      .toString()
+      .padStart(2, '0')}:${secs.toString().padStart(2, '0')},${milliseconds
+      .toString()
+      .padStart(3, '0')}`;
+  }
+
+  // Translate each chunk to English
+  const translatedChunks = [];
+  for (let i = 0; i < subtitleChunks.length; i++) {
+    const chunk = subtitleChunks[i];
+    console.log(`Translating chunk ${i + 1}/${subtitleChunks.length}...`);
+    
+    try {
+      const translatedText = await translateTranscriptToEnglish(chunk.transcript);
+      translatedChunks.push({
+        ...chunk,
+        transcript: translatedText
+      });
+    } catch (error) {
+      console.error(`Failed to translate chunk ${i + 1}:`, error);
+      // Use original text if translation fails
+      translatedChunks.push(chunk);
+    }
+  }
+
+  return translatedChunks
+    .map((chunk, idx) => {
+      const start = secondsToSRTTime(chunk.startTime);
+      const end = secondsToSRTTime(chunk.endTime);
+      const text = chunk.transcript.trim();
+      return `${idx + 1}\n${start} --> ${end}\n${text}\n`;
+    })
+    .join('\n');
+}
+
+async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFilename = 'temp_subtitles.srt', targetLanguage = 'en', translateToEnglish = true, sourceLanguage = 'auto') {
+  let tempVideoPath = null;
+  let srtFilePath = null;
+  let outputVideoPath = null;
+  const tempFiles = [];
+
+  try {
+    
+    // Step 1: Download video from URL
+    console.log('Downloading video from URL...');
+    tempVideoPath = await downloadVideoFromUrl(videoUrl);
+    tempFiles.push(tempVideoPath);
+    console.log('Video downloaded successfully');
+
+
+    // Step 2: Generate SRT subtitles
+    console.log('Generating SRT subtitles...');
+    const srtContent = await generateSRTFromChunks(subtitleChunks);
+    srtFilePath = await saveSRTToFile(srtContent, srtFilename);
+    tempFiles.push(srtFilePath);
+    console.log('SRT subtitles generated successfully');
+
+    // Step 3: Apply subtitles to video using FFmpeg
+    console.log('Applying subtitles to video...');
+    outputVideoPath = await applySubtitlesToVideo(tempVideoPath, srtFilePath);
+    tempFiles.push(outputVideoPath);
+    console.log('Subtitles applied successfully');
+
+    // Step 4: Upload video to Cloudinary
+    console.log('Uploading video to Cloudinary...');
+    const videoBuffer = await fs.readFile(outputVideoPath);
+    const cloudinaryUrl = await uploadVideoToCloudinary(videoBuffer);
+    console.log('Video uploaded to Cloudinary successfully');
+    console.log('cloudinaryUrl:', cloudinaryUrl);
+
+    // Step 5: Clean up temporary files
+    console.log('Cleaning up temporary files...');
+    await cleanupTempFiles(tempFiles);
+
+    return {
+      success: true,
+      cloudinaryUrl,
+      processingDetails: {
+        originalVideoUrl: videoUrl,
+        targetLanguage,
+        translationApplied: translateToEnglish,
+        sourceLanguage: translateToEnglish ? sourceLanguage : 'none',
+        processingSteps: [
+          'Video downloaded from URL',
+          ...(translateToEnglish ? ['Transcripts translated to English'] : []),
+          'SRT subtitles generated',
+          'Subtitles applied using FFmpeg',
+          'Video uploaded to Cloudinary',
+          'Temporary files cleaned up'
+        ]
+      }
+    };
+
+  } catch (error) {
+    console.error('Error in video processing with subtitles:', error);
+    
+    // Clean up any temporary files that were created
+    if (tempFiles.length > 0) {
+      console.log('Cleaning up temporary files due to error...');
+      await cleanupTempFiles(tempFiles);
+    }
+
+    return {
+      success: false,
+      error: error.message,
+      processingDetails: {
+        originalVideoUrl: videoUrl,
+        targetLanguage,
+        translationApplied: translateToEnglish,
+        sourceLanguage: translateToEnglish ? sourceLanguage : 'none',
+        errorStep: error.message
+      }
+    };
+  }
+}
+
+
+
+/**
  * Applies SRT subtitles to a video using FFmpeg
  * @param {string} inputVideoPath - Path to input video file
  * @param {string} srtFilePath - Path to SRT subtitle file
@@ -635,7 +768,6 @@ You are a professional translator. Translate the following text to clear, natura
 Instructions:
 1. Translate the text to natural, fluent English
 2. Preserve the original meaning and context
-3. Keep the translation concise and readable
 4. Maintain any technical terms or proper nouns appropriately
 5. Return ONLY the translated text, no additional text or explanations
 
@@ -680,4 +812,6 @@ module.exports = {
   processVideoWithSubtitles,
   translateTranscriptToEnglish,
   createSequentialTimestamps,
-}; 
+  generateSRTFromChunks,
+  processVideoWithChunkedSubtitles
+    }; 

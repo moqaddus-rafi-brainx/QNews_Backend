@@ -18,17 +18,14 @@ const client = new TwelveLabs({ apiKey: process.env.TWELVELABS_API_KEY });
 const createIndex = async () => {
 
     const models = [
-        {
-        name: "pegasus1.2",
-        options: ["visual", "audio"],
-        },
+        
         {
             name: "marengo2.7",
-            options: ["visual", "audio"], // speech and transcripts
+            options: ["visual", "audio"],
         }
     ];
     const index = await client.index.create({
-        name: "video-index-2",
+        name: "video-index-3",
         models: models,
     });
     console.log(
@@ -207,8 +204,8 @@ const getVideoTranscript = async (videoId, description) => {
          is_speaker: true/false, 
          transcripts:[{transcript: 'text',
          english_translation: 'text', 
-         startTime: number in seconds,
-         endTime: number in seconds,
+         startTime:decimal number in seconds (with decimal places for accuracy) e.g. 1.23,
+         endTime:decimal number in seconds (with decimal places for accuracy),
           importanceScore: number}
           ] or []
          language: "en-US" or "Unknown"
