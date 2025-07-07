@@ -194,7 +194,7 @@ const getVideoTranscript = async (videoId, description) => {
           - Do NOT include segments that are too short (less than 5 words) or meaningless.
           - If no meaningful transcript exists, return empty array [].
         2.Importance score (1-100) (How important this segment is to be kept in the summarized version of the video).
-        NOTE: For measuring importance score, this description should also be used for context.Description: ${description}
+        NOTE: For measuring importance score, this description MUST also be used for context. Description: ${description}
         3.Does the video contain a visible speaker or is it a voiceover? Respond with true if a person is visibly speaking (i.e., their lip movements match the audio), otherwise respond with false.
         4.Language code for the language of the video like "en-US" or "Unknown" if not detected.
         5.English translation of each transcript segment.

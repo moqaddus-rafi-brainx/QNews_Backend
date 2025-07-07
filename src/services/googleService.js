@@ -16,24 +16,29 @@ const client = new VideoIntelligenceServiceClient({
  * @returns {Promise<Object>} The operation result from Google Video Intelligence
  */
 async function annotateVideoWithGoogle(fileBuffer, languageCode) {
-  const request = {
-    inputContent: fileBuffer.toString('base64'),
-    features: [
-      'SPEECH_TRANSCRIPTION',
-      'LABEL_DETECTION',
-      'SHOT_CHANGE_DETECTION',
-    ],
-    videoContext: {
-      speechTranscriptionConfig: {
-        languageCode: languageCode,
-        enableAutomaticPunctuation: true
+  try {
+    const request = {
+      inputContent: fileBuffer.toString('base64'),
+      features: [
+        'SPEECH_TRANSCRIPTION',
+        'LABEL_DETECTION',
+        'SHOT_CHANGE_DETECTION',
+      ],
+      videoContext: {
+        speechTranscriptionConfig: {
+          languageCode: languageCode,
+          enableAutomaticPunctuation: true
+        }
       }
-    }
-  };
-
-  const [operation] = await client.annotateVideo(request);
-  const [operationResult] = await operation.promise();
-  return operationResult;
+    };
+    const [operation] = await client.annotateVideo(request);
+    const [operationResult] = await operation.promise();
+    return operationResult;
+  } catch (error) {
+    console.error('Error in video annotation:', error);
+    throw error;
+  }
+  
 }
 
 /**
@@ -44,7 +49,15 @@ async function annotateVideoWithGoogle(fileBuffer, languageCode) {
  */
 async function processVideoAnnotation(fileBuffer, detectedLanguage) {
   // Use the Google Service for video annotation
-  const operationResult = await annotateVideoWithGoogle(fileBuffer, detectedLanguage);
+  let operationResult=null;
+  try {
+    operationResult = await annotateVideoWithGoogle(fileBuffer, detectedLanguage);
+    console.log(operationResult);
+  } catch (error) {
+    console.error('Error in video annotation:', error);
+    throw error;
+  }
+  
   let annotationResults;
   let segmentLabelAnnotations;
   let shotAnnotations;
@@ -52,6 +65,11 @@ async function processVideoAnnotation(fileBuffer, detectedLanguage) {
   // Safely check if speechTranscriptions exists and is not empty
   const hasTranscriptions0 = operationResult.annotationResults[0]?.speechTranscriptions?.length > 0;
   const hasTranscriptions1 = operationResult.annotationResults[1]?.speechTranscriptions?.length > 0;
+
+  console.log('hasTranscriptions0:', hasTranscriptions0);
+  console.log('hasTranscriptions1:', hasTranscriptions1);
+  console.log('annotationResults[0].speechTranscriptions length:', operationResult.annotationResults[0]?.speechTranscriptions?.length);
+  console.log('annotationResults[1].speechTranscriptions length:', operationResult.annotationResults[1]?.speechTranscriptions?.length);
 
   if(hasTranscriptions0) {
     annotationResults = operationResult.annotationResults[0];
@@ -77,18 +95,30 @@ async function processVideoAnnotation(fileBuffer, detectedLanguage) {
         : operationResult.annotationResults[1]?.shotAnnotations || [];
   }
 
-  const speechTranscripts = annotationResults.speechTranscriptions.map(t => {
-    return t.alternatives[0] && {
+  console.log('Selected annotationResults.speechTranscriptions length:', annotationResults.speechTranscriptions?.length);
+
+  const speechTranscripts = (annotationResults.speechTranscriptions || []).map(t => {
+    console.log('Processing transcription item:', t);
+    console.log('t.alternatives:', t.alternatives);
+    console.log('t.alternatives[0]:', t.alternatives?.[0]);
+    
+    const result = t.alternatives[0] && {
       transcript: t.alternatives[0].transcript,
       confidence: t.alternatives[0].confidence,
       languageCode: t.languageCode || 'unknown',
-      words: t.alternatives[0].words.map(w => ({
+      words: (t.alternatives[0].words || []).map(w => ({
         word: w.word,
         startTime: parseFloat(w.startTime.seconds || 0) + parseFloat(w.startTime.nanos) * 1e-9,
         endTime: parseFloat(w.endTime.seconds || 0) + parseFloat(w.endTime.nanos) * 1e-9
       }))
     };
+    
+    console.log('Mapped result:', result);
+    return result;
   }).filter(Boolean);
+
+  console.log('Final speechTranscripts length:', speechTranscripts.length);
+  console.log('Final speechTranscripts:', speechTranscripts);
 
   const labels = (segmentLabelAnnotations || []).map(label => ({
     description: label.entity.description,

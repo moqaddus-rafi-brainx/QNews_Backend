@@ -116,6 +116,10 @@ async function removeClipFromVideo(videoSrc, segmentsToKeep, totalDuration) {
       },
       start: outputTime,
       length: clipLength,
+      transition: {
+        in: "fade",
+        out: "fade"
+      },
       fit: 'crop'
     });
     outputTime += clipLength;
@@ -131,7 +135,7 @@ async function removeClipFromVideo(videoSrc, segmentsToKeep, totalDuration) {
     },
     output: {
       format: 'mp4',
-      resolution: 'sd'
+      resolution: "1080"
     }
   };
 

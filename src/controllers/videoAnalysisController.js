@@ -77,7 +77,7 @@ async function summarizeVideo(req, res) {
       irrelevantContent = mergedShots.irrelevantShots;
     } else {
       
-      const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
+      const transcriptTimestamps = speechTranscripts && speechTranscripts.length > 0 ? getTranscriptTimestamps(speechTranscripts) : [];
       const groupedTranscripts = await groupRelatedTranscripts(transcriptTimestamps,speechTranscripts, fileBuffer, shots, mainTopicUsingTranscripts);
     
       
@@ -633,7 +633,7 @@ async function testingUsingPunctuationAndDiffModel(req,res){
 
     // Step 2: Process video annotation using the Google service
     const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer,language);
-    const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
+    const transcriptTimestamps = speechTranscripts && speechTranscripts.length > 0 ? getTranscriptTimestamps(speechTranscripts) : [];
     const punctuatedTranscripts=await applyPunctuationToTranscripts(transcriptTimestamps);
     const sentences=await divideTranscriptsIntoSentencesWithAI(punctuatedTranscripts,speechTranscripts);
     const sentencesWithImportance=await analyzeSentenceImportance(sentences,description,mainTopic,category);
@@ -677,7 +677,8 @@ async function summarizeVideo5(req, res) {
       return res.status(400).json({ error: 'No video file uploaded' });
     }
     const fileBuffer = req.file.buffer;
-    const description=req.body.description || null;
+    const description=req.body.summary || null;
+    console.log(description);
     const url = await uploadVideoToCloudinary(fileBuffer);
     const videoId = await uploadVideoToTwelveLabs(url);
     console.log(videoId);
@@ -715,66 +716,100 @@ async function summarizeVideo5(req, res) {
     let videoWithAudioUrl=null;
     let mergedGroups=null;
     let segmentsToKeep = [];
+    let sentences=null;
+    let speechTranscripts=null;
     
       //Speaker present,no need to apply voiceover
       if(result.is_speaker){
-       
-        const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer,parsedDetails.language);
-        const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
-        const punctuatedTranscripts=await applyPunctuationToTranscripts(transcriptTimestamps);
-        const sentences=await divideTranscriptsIntoSentencesWithAI(punctuatedTranscripts,speechTranscripts);
-        const sentencesWithImportance=await analyzeSentenceImportance(sentences,description,parsedDetails.mainTopic,parsedDetails.category);
-        const selectedTranscripts=await selectTranscriptsByImportance(sentencesWithImportance);
-        console.log(selectedTranscripts);
-        mergedGroups = mergeCloseTranscripts(selectedTranscripts.selectedTranscripts);
-        console.log(selectedTranscripts.totalDuration);
-             
-             // Convert mergedGroups to segmentsToKeep array
-             for (const group of mergedGroups) {
-               if (group && group.length > 0) {
-                 // Get the start time from the first transcript in the group
-                 const startTime = group[0].startTime;
-                 // Get the end time from the last transcript in the group
-                 const endTime = group[group.length - 1].endTime;
-                 
-                 segmentsToKeep.push({
-                   startTime: startTime,
-                   endTime: endTime
-                 });
-               }
-             }
-             console.log('segmentsToKeep:', segmentsToKeep);
-         // Validate segments before trimming
-         if (segmentsToKeep.length === 0) {
-           console.warn('No segments to keep, skipping video trimming');
-           clippedVideoUrl = url; // Use original video
-         } else {
-           // Validate segment timing
-           const totalDuration = Math.max(...segmentsToKeep.map(s => s.endTime));
-           console.log('Total duration from segments:', totalDuration);
-           console.log('Selected transcripts total duration:', selectedTranscripts.totalDuration);
-           
-           try {
-             const renderId = await removeClipFromVideo(url, segmentsToKeep, selectedTranscripts.totalDuration);
-             clippedVideoUrl = renderId.url;
-             console.log('Video trimming successful:', clippedVideoUrl);
-           } catch (trimError) {
-             console.error('Video trimming failed, using original video:', trimError.message);
-             clippedVideoUrl = url; // Fallback to original video
-           }
-         }
-         
-        
-         const subtitleChunks=createSubtitleChunks(selectedTranscripts.selectedTranscripts);
-         const subtitleResult = await processVideoWithChunkedSubtitles(clippedVideoUrl,subtitleChunks);
-         
-         if (!subtitleResult.success) {
-          throw new Error(`Failed to process video with subtitles: ${subtitleResult.error}`);
+        try{
+          const { speechTranscripts: googleSpeechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer,parsedDetails.language);
+          speechTranscripts = googleSpeechTranscripts;
+          console.log('Google API speechTranscripts:', speechTranscripts);
+          console.log('speechTranscripts length:', speechTranscripts ? speechTranscripts.length : 'undefined');
+        }
+        catch(error){
+          console.error('Error in video transcipt fetching from google API:', error);
+          res.status(500).json({ error: 'Failed to analyze video', trace: error?.message });
+          return; // Exit early on error
         }
         
-        const { cloudinaryUrl } = subtitleResult;
-        videoWithAudioUrl=cloudinaryUrl;
-      
+        // If no speech transcripts found, handle gracefully
+        if (!speechTranscripts || speechTranscripts.length === 0) {
+          console.warn('No speech transcripts found in video from Google API, trying to use TwelveLabs transcripts');
+          
+          // Try to use TwelveLabs transcripts as fallback
+          if (transcripts && transcripts.length > 0) {
+            console.log('Using TwelveLabs transcripts as fallback');
+            speechTranscripts = transcripts;
+          } else {
+            console.warn('No speech transcripts found from either Google API or TwelveLabs');
+            // Set default values and skip transcript processing
+            sentences = [];
+            mergedGroups = [];
+            segmentsToKeep = [];
+            clippedVideoUrl = url; // Use original video
+            videoWithAudioUrl = url;
+          }
+        }
+        
+        // Only process transcripts if we have them
+        if (speechTranscripts && speechTranscripts.length > 0) {
+          const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
+          const punctuatedTranscripts=await applyPunctuationToTranscripts(transcriptTimestamps);
+          sentences=await divideTranscriptsIntoSentencesWithAI(punctuatedTranscripts,speechTranscripts);
+          const sentencesWithImportance=await analyzeSentenceImportance(sentences,description,parsedDetails.mainTopic,parsedDetails.category);
+          console.log(sentencesWithImportance);
+          const selectedTranscripts=await selectTranscriptsByImportance(sentencesWithImportance);
+          console.log(selectedTranscripts);
+          mergedGroups = mergeCloseTranscripts(selectedTranscripts.selectedTranscripts);
+          console.log(selectedTranscripts.totalDuration);
+               
+               // Convert mergedGroups to segmentsToKeep array
+               for (const group of mergedGroups) {
+                 if (group && group.length > 0) {
+                   // Get the start time from the first transcript in the group
+                   const startTime = group[0].startTime;
+                   // Get the end time from the last transcript in the group
+                   const endTime = group[group.length - 1].endTime;
+                   
+                   segmentsToKeep.push({
+                     startTime: startTime,
+                     endTime: endTime
+                   });
+                 }
+               }
+               console.log('segmentsToKeep:', segmentsToKeep);
+           // Validate segments before trimming
+           if (segmentsToKeep.length === 0) {
+             console.warn('No segments to keep, skipping video trimming');
+             clippedVideoUrl = url; // Use original video
+           } else {
+             // Validate segment timing
+             const totalDuration = Math.max(...segmentsToKeep.map(s => s.endTime));
+             console.log('Total duration from segments:', totalDuration);
+             console.log('Selected transcripts total duration:', selectedTranscripts.totalDuration);
+             
+             try {
+               const renderId = await removeClipFromVideo(url, segmentsToKeep, selectedTranscripts.totalDuration);
+               clippedVideoUrl = renderId.url;
+               console.log('Video trimming successful:', clippedVideoUrl);
+             } catch (trimError) {
+               console.error('Video trimming failed, using original video:', trimError.message);
+               clippedVideoUrl = url; // Fallback to original video
+             }
+           }
+           
+          
+           const subtitleChunks=createSubtitleChunks(selectedTranscripts.selectedTranscripts);
+           const subtitleResult = await processVideoWithChunkedSubtitles(clippedVideoUrl,subtitleChunks);
+           
+           if (!subtitleResult.success) {
+            throw new Error(`Failed to process video with subtitles: ${subtitleResult.error}`);
+          }
+          
+          const { cloudinaryUrl } = subtitleResult;
+          videoWithAudioUrl=cloudinaryUrl;
+        }
 
       }
       else{
@@ -856,7 +891,8 @@ async function summarizeVideo5(req, res) {
       videoWithAudioUrl,
       segmentsToKeep,
       mergedGroups,
-      selectedHighlights
+      selectedHighlights,
+      sentences
     });
 
   } catch (error) {

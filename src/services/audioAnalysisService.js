@@ -122,6 +122,11 @@ async function analyzeTranscript(transcript) {
  * @returns {Array} - Array of objects with transcript and its timestamps
  */
 function getTranscriptTimestamps(result) {
+  // Handle null or undefined result
+  if (!result || !Array.isArray(result) || result.length === 0) {
+    return [];
+  }
+  
   return result.map(item => {
     const words = item.words;
     if (!words || words.length === 0) {
