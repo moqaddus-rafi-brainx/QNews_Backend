@@ -724,8 +724,7 @@ async function summarizeVideo5(req, res) {
         try{
           const { speechTranscripts: googleSpeechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer,parsedDetails.language);
           speechTranscripts = googleSpeechTranscripts;
-          console.log('Google API speechTranscripts:', speechTranscripts);
-          console.log('speechTranscripts length:', speechTranscripts ? speechTranscripts.length : 'undefined');
+          
         }
         catch(error){
           console.error('Error in video transcipt fetching from google API:', error);
