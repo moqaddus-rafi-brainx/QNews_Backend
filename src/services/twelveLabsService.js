@@ -312,8 +312,8 @@ const selectMostImportantHighlights = (highlights) => {
       let highlightDuration = highlight.end - highlight.start;
       if(highlightDuration<=2) continue;
 
-      if(totalDuration<25 && totalDuration+highlightDuration>=40 ){
-        const remainingDuration = totalDuration+highlightDuration-40;
+      if(totalDuration<25 && totalDuration+highlightDuration>=45 ){
+        const remainingDuration = totalDuration+highlightDuration-45;
         highlight.end = highlight.end - remainingDuration;
         selectedHighlights.push(highlight);
         highlightDuration = highlight.end - highlight.start;
@@ -356,7 +356,7 @@ const selectMostImportantHighlights = (highlights) => {
         const duration = transcript.endTime - transcript.startTime;
         
         // If adding this transcript would exceed 30 seconds, stop
-        if (totalDuration<25 && totalDuration + duration < 50) {
+        if (totalDuration<25 && totalDuration + duration < 45) {
             selectedTranscripts.push(transcript);
             totalDuration += duration;
             

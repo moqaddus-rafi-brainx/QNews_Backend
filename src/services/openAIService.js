@@ -375,29 +375,44 @@ Return result as JSON in the following format:
 function mergeCloseTranscripts(transcripts) {
   if (!transcripts || transcripts.length === 0) return [];
   
-  // Sort transcripts by start time
-  const sortedTranscripts = [...transcripts].sort((a, b) => 
-    parseFloat(a.startTime) - parseFloat(b.startTime)
-  );
+  // // Sort transcripts by start time
+  // const sortedTranscripts = [...transcripts].sort((a, b) => 
+  //   parseFloat(a.startTime) - parseFloat(b.startTime)
+  // );
   
   const mergedGroups = [];
-  let currentGroup = [sortedTranscripts[0]];
+  let currentGroup = [transcripts[0]];
   
-  for (let i = 1; i < sortedTranscripts.length; i++) {
-    const current = sortedTranscripts[i];
+  for (let i = 1; i < transcripts.length; i++) {
+    const current = transcripts[i];
     const lastInGroup = currentGroup[currentGroup.length - 1];
     
     // Check if current transcript is within 3 seconds of the last transcript in the group
     const timeGap = parseFloat(current.startTime) - parseFloat(lastInGroup.endTime);
     
     if (timeGap <= 3) {
+
+      // if (timeGap > 0) {
+      //   // Since transcripts array contains references to the original objects,
+      //   // modifying lastInGroup directly modifies the original transcript
+      //   lastInGroup.endTime = parseFloat(lastInGroup.endTime) + timeGap;
+        
+      //   // Extend the last word's endTime if words array exists
+      //   if (lastInGroup.words && Array.isArray(lastInGroup.words) && lastInGroup.words.length > 0) {
+      //     const lastWord = lastInGroup.words[lastInGroup.words.length - 1];
+      //     lastWord.endTime = parseFloat(lastWord.endTime) + timeGap;
+      //   }
+      // }
+
       // Merge into current group
       currentGroup.push(current);
+      
     } else {
       // Start new group
       mergedGroups.push(currentGroup);
       currentGroup = [current];
     }
+    
   }
   
   // Add the last group
@@ -1161,103 +1176,221 @@ function addWordsToSentences(sentences, wordsList) {
  * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime, words array
  * @returns {Array} Array of subtitle chunk objects with transcript, startTime, endTime (mapped to 0+)
  */
-function createSubtitleChunks(sentences) {
-  if (!Array.isArray(sentences) || sentences.length === 0) {
+// function createSubtitleChunks(sentences) {
+//   if (!Array.isArray(sentences) || sentences.length === 0) {
+//     return [];
+//   }
+
+//   console.log(`Creating subtitle chunks from ${sentences.length} sentences...`);
+
+//   const subtitleChunks = [];
+//   let previousEndTime=0;
+//   let currentStartTime=0;
+//   let currentTimeOffset = 0; // Tracks the mapped time starting from 0
+
+//   for (const sentence of sentences) {
+//     const sentenceStartTime = parseFloat(sentence.startTime);
+//     const sentenceEndTime = parseFloat(sentence.endTime);
+    
+//     // Use the words array that's already present in the sentence object
+//     let sentenceWords = sentence.words || [];
+
+//     if (sentenceWords.length === 0) {
+//       // If no words found, create a single chunk for the sentence
+//       const chunkDuration = sentenceEndTime - sentenceStartTime;
+//       subtitleChunks.push({
+//         transcript: sentence.transcript,
+//         startTime: currentTimeOffset,
+//         endTime: currentTimeOffset + chunkDuration,
+//         originalStartTime: sentenceStartTime,
+//         originalEndTime: sentenceEndTime,
+//         wordCount: sentence.transcript.split(' ').length
+//       });
+//       currentTimeOffset += chunkDuration;
+//       continue;
+//     }
+
+//     const sentenceText = sentence.transcript;
+//     const words = sentenceText.split(' ').filter(word => word.trim().length > 0);
+    
+//     const chunks = [];
+//     const chunkSize = 11; // Target 11 words per chunk
+    
+//     for (let i = 0; i < words.length; i += chunkSize) {
+//       const chunkWords = words.slice(i, i + chunkSize);
+//       chunks.push(chunkWords.join(' '));
+//     }
+
+//     // Match each chunk to corresponding words
+//     let wordIndex = 0;
+    
+//     for (const chunkText of chunks) {
+//       const chunkWordCount = chunkText.split(' ').length;
+      
+//       // Find the next set of words that match this chunk
+//       const chunkWords = [];
+//       let wordsFound = 0;
+      
+//       while (wordIndex < sentenceWords.length && wordsFound < chunkWordCount) {
+//         chunkWords.push(sentenceWords[wordIndex]);
+//         wordsFound++;
+//         wordIndex++;
+//       }
+
+//       if (chunkWords.length === 0) {
+//         // Fallback: use estimated duration based on word count
+//         const estimatedDuration = chunkWordCount * 0.5; // Assume 0.5 seconds per word
+//         subtitleChunks.push({
+//           transcript: chunkText,
+//           startTime: currentTimeOffset,
+//           endTime: currentTimeOffset + estimatedDuration,
+//           originalStartTime: sentenceStartTime,
+//           originalEndTime: sentenceEndTime,
+//           wordCount: chunkWordCount
+//         });
+//         currentTimeOffset += estimatedDuration;
+
+//         continue;
+//       }
+
+//       // Calculate chunk timestamps from the words
+//       const chunkStartTime = parseFloat(chunkWords[0].startTime);
+//       const chunkEndTime = parseFloat(chunkWords[chunkWords.length - 1].endTime);
+//       const chunkDuration = chunkEndTime - chunkStartTime;
+//       if(previousEndTime>0){
+//         currentTimeOffset+=chunkStartTime-previousEndTime;
+//       }
+
+//       // Map to sequential time starting from 0
+//       subtitleChunks.push({
+//         transcript: chunkText,
+//         startTime: currentTimeOffset,
+//         endTime: currentTimeOffset + chunkDuration,
+//         originalStartTime: chunkStartTime,
+//         originalEndTime: chunkEndTime,
+//         wordCount: chunkWordCount
+//       });
+//       previousEndTime=chunkEndTime;
+//       currentTimeOffset += chunkDuration;
+//     }
+//   }
+
+//   console.log(`Created ${subtitleChunks.length} subtitle chunks`);
+//   return subtitleChunks;
+// }
+
+function createSubtitleChunks(mergedGroups) {
+  if (!Array.isArray(mergedGroups) || mergedGroups.length === 0) {
     return [];
   }
 
-  console.log(`Creating subtitle chunks from ${sentences.length} sentences...`);
+  console.log(`Creating subtitle chunks from ${mergedGroups.length} merged groups...`);
 
   const subtitleChunks = [];
   let currentTimeOffset = 0; // Tracks the mapped time starting from 0
 
-  for (const sentence of sentences) {
-    const sentenceStartTime = parseFloat(sentence.startTime);
-    const sentenceEndTime = parseFloat(sentence.endTime);
-    
-    // Use the words array that's already present in the sentence object
-    let sentenceWords = sentence.words || [];
-
-    if (sentenceWords.length === 0) {
-      // If no words found, create a single chunk for the sentence
-      const chunkDuration = sentenceEndTime - sentenceStartTime;
-      subtitleChunks.push({
-        transcript: sentence.transcript,
-        startTime: currentTimeOffset,
-        endTime: currentTimeOffset + chunkDuration,
-        originalStartTime: sentenceStartTime,
-        originalEndTime: sentenceEndTime,
-        wordCount: sentence.transcript.split(' ').length
-      });
-      currentTimeOffset += chunkDuration;
+  for (const group of mergedGroups) {
+    if (!Array.isArray(group) || group.length === 0) {
       continue;
     }
 
-    const sentenceText = sentence.transcript;
-    const words = sentenceText.split(' ').filter(word => word.trim().length > 0);
-    
-    const chunks = [];
-    const chunkSize = 11; // Target 11 words per chunk
-    
-    for (let i = 0; i < words.length; i += chunkSize) {
-      const chunkWords = words.slice(i, i + chunkSize);
-      chunks.push(chunkWords.join(' '));
-    }
+    // Reset previousEndTime to 0 for each new group
+    let previousEndTime = 0;
 
-    // Match each chunk to corresponding words
-    let wordIndex = 0;
-    
-    for (const chunkText of chunks) {
-      const chunkWordCount = chunkText.split(' ').length;
+    // Process each transcript in the group
+    for (const sentence of group) {
+      const sentenceStartTime = parseFloat(sentence.startTime);
+      const sentenceEndTime = parseFloat(sentence.endTime);
       
-      // Find the next set of words that match this chunk
-      const chunkWords = [];
-      let wordsFound = 0;
-      
-      while (wordIndex < sentenceWords.length && wordsFound < chunkWordCount) {
-        chunkWords.push(sentenceWords[wordIndex]);
-        wordsFound++;
-        wordIndex++;
-      }
+      // Use the words array that's already present in the sentence object
+      let sentenceWords = sentence.words || [];
 
-      if (chunkWords.length === 0) {
-        // Fallback: use estimated duration based on word count
-        const estimatedDuration = chunkWordCount * 0.5; // Assume 0.5 seconds per word
+      if (sentenceWords.length === 0) {
+        // If no words found, create a single chunk for the sentence
+        const chunkDuration = sentenceEndTime - sentenceStartTime;
         subtitleChunks.push({
-          transcript: chunkText,
+          transcript: sentence.transcript,
           startTime: currentTimeOffset,
-          endTime: currentTimeOffset + estimatedDuration,
+          endTime: currentTimeOffset + chunkDuration,
           originalStartTime: sentenceStartTime,
           originalEndTime: sentenceEndTime,
-          wordCount: chunkWordCount
+          wordCount: sentence.transcript.split(' ').length
         });
-        currentTimeOffset += estimatedDuration;
+        currentTimeOffset += chunkDuration;
         continue;
       }
 
-      // Calculate chunk timestamps from the words
-      const chunkStartTime = parseFloat(chunkWords[0].startTime);
-      const chunkEndTime = parseFloat(chunkWords[chunkWords.length - 1].endTime);
-      const chunkDuration = chunkEndTime - chunkStartTime;
+      const sentenceText = sentence.transcript;
+      const words = sentenceText.split(' ').filter(word => word.trim().length > 0);
+      
+      const chunks = [];
+      const chunkSize = 11; // Target 11 words per chunk
+      
+      for (let i = 0; i < words.length; i += chunkSize) {
+        const chunkWords = words.slice(i, i + chunkSize);
+        chunks.push(chunkWords.join(' '));
+      }
 
-      // Map to sequential time starting from 0
-      subtitleChunks.push({
-        transcript: chunkText,
-        startTime: currentTimeOffset,
-        endTime: currentTimeOffset + chunkDuration,
-        originalStartTime: chunkStartTime,
-        originalEndTime: chunkEndTime,
-        wordCount: chunkWordCount
-      });
+      // Match each chunk to corresponding words
+      let wordIndex = 0;
+      
+      for (const chunkText of chunks) {
+        const chunkWordCount = chunkText.split(' ').length;
+        
+        // Find the next set of words that match this chunk
+        const chunkWords = [];
+        let wordsFound = 0;
+        
+        while (wordIndex < sentenceWords.length && wordsFound < chunkWordCount) {
+          chunkWords.push(sentenceWords[wordIndex]);
+          wordsFound++;
+          wordIndex++;
+        }
 
-      currentTimeOffset += chunkDuration;
+        if (chunkWords.length === 0) {
+          // Fallback: use estimated duration based on word count
+          const estimatedDuration = chunkWordCount * 0.5; // Assume 0.5 seconds per word
+          subtitleChunks.push({
+            transcript: chunkText,
+            startTime: currentTimeOffset,
+            endTime: currentTimeOffset + estimatedDuration,
+            originalStartTime: sentenceStartTime,
+            originalEndTime: sentenceEndTime,
+            wordCount: chunkWordCount
+          });
+          currentTimeOffset += estimatedDuration;
+          continue;
+        }
+
+        // Calculate chunk timestamps from the words
+        const chunkStartTime = parseFloat(chunkWords[0].startTime);
+        const chunkEndTime = parseFloat(chunkWords[chunkWords.length - 1].endTime);
+        const chunkDuration = chunkEndTime - chunkStartTime;
+        
+        // Add gap from previous chunk within the same group
+        if (previousEndTime > 0) {
+          currentTimeOffset += chunkStartTime - previousEndTime;
+        }
+
+        // Map to sequential time starting from 0
+        subtitleChunks.push({
+          transcript: chunkText,
+          startTime: currentTimeOffset,
+          endTime: currentTimeOffset + chunkDuration,
+          originalStartTime: chunkStartTime,
+          originalEndTime: chunkEndTime,
+          wordCount: chunkWordCount
+        });
+        
+        previousEndTime = chunkEndTime;
+        currentTimeOffset += chunkDuration;
+      }
     }
   }
 
   console.log(`Created ${subtitleChunks.length} subtitle chunks`);
   return subtitleChunks;
 }
-
 /**
  * Creates subtitle chunks with more precise word matching
  * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime
@@ -1382,6 +1515,33 @@ function createSubtitleChunksWithPreciseMatching(sentences, wordsList) {
   return subtitleChunks;
 }
 
+
+function extractLastWordTimestamps(mergedGroups) {
+  if (!mergedGroups || !Array.isArray(mergedGroups) || mergedGroups.length === 0) {
+    return [];
+  }
+
+  return mergedGroups
+    .filter(group => Array.isArray(group) && group.length > 0)
+    .map(group => {
+      const lastTranscript = group[group.length - 1];
+      
+      if (!lastTranscript.words || !Array.isArray(lastTranscript.words) || lastTranscript.words.length === 0) {
+        return null;
+      }
+      
+      const lastWord = lastTranscript.words[lastTranscript.words.length - 1];
+      return {
+        word: lastWord.word,
+        startTime: lastWord.startTime,
+        endTime: lastWord.endTime
+      };
+    })
+    .filter(word => word !== null);
+}
+
+
+
 module.exports = {
   parseOpenAIResponse,
   analyzeMainTopic,
@@ -1396,5 +1556,6 @@ module.exports = {
   analyzeSentenceImportance,
   addWordsToSentences,
   createSubtitleChunks,
-  createSubtitleChunksWithPreciseMatching
+  createSubtitleChunksWithPreciseMatching,
+  extractLastWordTimestamps
 };

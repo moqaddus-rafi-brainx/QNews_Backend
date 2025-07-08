@@ -2,7 +2,7 @@ const path = require('path');
 const multer = require('multer');
 const { LANGUAGE_NAMES } = require('../constants/languages');
 const { extractAudioAndAnalyze, getTranscriptTimestamps } = require('../services/audioAnalysisService');
-const { groupRelatedTranscripts,analyzeMainTopic,mergeCloseTranscripts,createSubtitleChunks,applyPunctuationToTranscripts,divideTranscriptsIntoSentencesWithAI,analyzeSentenceImportance } = require('../services/openAIService');
+const { groupRelatedTranscripts,analyzeMainTopic,mergeCloseTranscripts,createSubtitleChunks,applyPunctuationToTranscripts,divideTranscriptsIntoSentencesWithAI,analyzeSentenceImportance,extractLastWordTimestamps } = require('../services/openAIService');
 const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots,selectMostRelevantShotsWithin30sGreedy} = require('../services/visualAnalysisService');
 const { uploadVideoToCloudinary } = require('../services/cloudinaryUpload');
 const { removeClipFromVideo,overlayAudioOnVideo,applySubtitlesWithShotstack } = require('../services/videoTrimmingService');
@@ -680,6 +680,8 @@ async function summarizeVideo5(req, res) {
     const description=req.body.summary || null;
     console.log(description);
     const url = await uploadVideoToCloudinary(fileBuffer);
+    //const url="https://res.cloudinary.com/ds0opfsmi/video/upload/v1751966240/my_videos/osjftnkgtz7oniz2w9ik.mp4";
+    //const videoId="6860f40db1b32788e03cf8f1";
     const videoId = await uploadVideoToTwelveLabs(url);
     console.log(videoId);
     const result = await getVideoTranscript(videoId,description);
@@ -718,10 +720,14 @@ async function summarizeVideo5(req, res) {
     let segmentsToKeep = [];
     let sentences=null;
     let speechTranscripts=null;
+    let subtitleChunks=null;
     
       //Speaker present,no need to apply voiceover
       if(result.is_speaker){
         try{
+          if(parsedDetails.language=="Unknown"){
+            parsedDetails.language=language;
+          }
           const { speechTranscripts: googleSpeechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer,parsedDetails.language);
           speechTranscripts = googleSpeechTranscripts;
           
@@ -760,6 +766,12 @@ async function summarizeVideo5(req, res) {
           console.log(sentencesWithImportance);
           const selectedTranscripts=await selectTranscriptsByImportance(sentencesWithImportance);
           console.log(selectedTranscripts);
+
+          // Sort the selected transcripts by startTime before merging
+          selectedTranscripts.selectedTranscripts.sort((a, b) => 
+            parseFloat(a.startTime) - parseFloat(b.startTime)
+          );
+
           mergedGroups = mergeCloseTranscripts(selectedTranscripts.selectedTranscripts);
           console.log(selectedTranscripts.totalDuration);
                
@@ -773,11 +785,14 @@ async function summarizeVideo5(req, res) {
                    
                    segmentsToKeep.push({
                      startTime: startTime,
-                     endTime: endTime
+                     endTime: endTime + 0.3
                    });
                  }
                }
+
                console.log('segmentsToKeep:', segmentsToKeep);
+          const lastWordTimestamps=extractLastWordTimestamps(mergedGroups);
+          console.log(lastWordTimestamps);
            // Validate segments before trimming
            if (segmentsToKeep.length === 0) {
              console.warn('No segments to keep, skipping video trimming');
@@ -798,8 +813,9 @@ async function summarizeVideo5(req, res) {
              }
            }
            
+         
           
-           const subtitleChunks=createSubtitleChunks(selectedTranscripts.selectedTranscripts);
+           subtitleChunks=createSubtitleChunks(mergedGroups);
            const subtitleResult = await processVideoWithChunkedSubtitles(clippedVideoUrl,subtitleChunks);
            
            if (!subtitleResult.success) {
@@ -890,6 +906,7 @@ async function summarizeVideo5(req, res) {
       videoWithAudioUrl,
       segmentsToKeep,
       mergedGroups,
+      subtitleChunks,
       selectedHighlights,
       sentences
     });
