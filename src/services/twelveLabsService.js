@@ -6,6 +6,7 @@ require('dotenv').config();
 // Import the parseOpenAIResponse function
 const { parseOpenAIResponse } = require('./openAIService');
 
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -130,10 +131,38 @@ const getVideoDetails = async (videoId, description) => {
     return { details: parsedDetails, summary: summary.summary };
 }
 
+const getVideoHighlights2 = async (videoId,description) => {
+    const result = await client.analyze(
+        videoId,
+        `${description?"In context of this description: "+description+", " : ""}extract only the most important highlights from this video that contain most important visual information.
+        IMPORTANT: Skip or remove irrelevant visual scenes from highlights time stamps like credits, logos(EFE logo), etc.
+        IMPORTANT: Each highlight MUST be atleast 5 seconds long and AT MOST 15-20 seconds long.
+        These highlights will be used to summarize the video into small clips.
+        IMPORTANT: Return the result in EXACT JSON format:
+         {
+         highlights:[{highlight: 'text', start: number, end: number,summary: 'text'}]
+         }
+        `,
+        0.4,
+    );
+    // Define fallback structure
+    const fallbackStructure = {
+        highlights: []
+    };
+    
+    try {
+        return parseOpenAIResponse(result.data, fallbackStructure);
+    } catch (error) {
+        console.error('Failed to parse AI response:', error.message);
+        console.error('Raw response data:', result.data);
+        return fallbackStructure;
+    }
+}   
+
 const getVideoHighlights = async (videoId,description) => {
     const highlights = await client.summarize(videoId, "highlight", `In context of this description: ${description}, extract all highlights from this video that contain most important visual information.
         IMPORTANT: Skip or remove irrelevant visual scenes from highlights time stamps like credits, logos(EFE logo), etc.
-        NOTE: Each highlight should be atleast 5 seconds long and at most 15-20 seconds long.
+        IMPORTANT: Each highlight MUST be atleast 5 seconds long and AT MOST 15-20 seconds long.
         NOTE: Duration of all higlights should add up to AT LEAST 25 seconds.
         `);
     
@@ -195,7 +224,7 @@ const getVideoTranscript = async (videoId, description) => {
           - If no meaningful transcript exists, return empty array [].
         2.Importance score (1-100) (How important this segment is to be kept in the summarized version of the video).
         NOTE: For measuring importance score, this description MUST also be used for context. Description: ${description}
-        3.Does the video contain a visible speaker or is it a voiceover? Respond with true if a person is visibly speaking (i.e., their lip movements match the audio), otherwise respond with false.
+        3.Does the video contain a visible speaker anywhere in the video or is it a voiceover? Respond with true if a person is visibly speaking anywhere in the video (i.e., their lip movements match the audio), otherwise respond with false.
         4.Language code for the language of the video like "en-US" or "Unknown" if not detected.
         5.English translation of each transcript segment.
         IMPORTANT: the language code MUST be in the same format.
@@ -370,53 +399,52 @@ const selectMostImportantHighlights = (highlights) => {
 };
 
 async function generateVoiceOverForVideo(isTranscript,description,contentData,segmentsToKeep, duration,videoId) {
-    let contentType = '';
-    if(isTranscript){
-      contentType = 'Transcript';
+    // let contentType = '';
+    // if(isTranscript){
+    //   contentType = 'Transcript';
       
-    }
-    else{
-      contentType = 'Summary';
-    }
-    const targetWordCount = Math.floor(duration * 2.5);
-    const result = await client.analyze(
-        videoId,
-        `Analyzing the video, give a summarized voiceover script for the summarized version of this video that when converted to audio is no more than ${duration} seconds long.
-        Focus mainly on the video description and transcript if its provided and do not include too much of scene descriptions.
-        ${description?"Here is the description of the video: "+description:""}
-        ${isTranscript?"Here is the transcript for the selected parts of the video: "+contentData:"Here are the selected highlights of the video: "+ contentData}
-        Here are the segments that will make summarized version of the video: ${segmentsToKeep}
-        IMPORTANT:The script must be almost ${targetWordCount} words with is the estimated word count for the script.
-        NOTE: Respond ONLY with the script, do not include any other text or explanation.`,
-        0.2,
-    );
+    // }
+    // else{
+    //   contentType = 'Summary';
+    // }
+    // const targetWordCount = Math.floor(duration * 2.2);
+    // const result = await client.analyze(
+    //     videoId,
+    //     `Analyzing the video, give a summarized voiceover script for the summarized version of this video.
+    //     IMPORTANT: The script MUST be of the length so that the when converted to audio is no more than ${duration} seconds long.
+    //     Focus mainly on the video description and transcript if its provided and do not include too much of scene descriptions.
+    //     ${description?"Here is the description of the video: "+description:""}
+    //     ${isTranscript?"Here is the transcript for the selected parts of the video: "+contentData:"Here are the selected highlights of the video: "+ contentData}
+    //     ${segmentsToKeep.length>0?"Analyze the following segments of video that make up the summarized version of the video: "+segmentsToKeep:""}
+    //     IMPORTANT:The script must be almost ${targetWordCount} words with is the estimated word count for the script so that the audio is no more than ${duration} seconds long.
+    //     NOTE: Respond ONLY with the script, do not include any other text or explanation.`,
+    //     0.2,
+    // );
 
-    return result.data;
+    // return result.data;
   
-    //const targetWordCount = Math.floor(duration * 2.3);
+    const targetWordCount = Math.floor(duration * 2.3);
     
     
-//     const prompt = `You are a professional transcript generator for voiceovers on summarized videos. Write a compelling, natural-sounding voiceover script summarizing the video content.
+    const prompt = `Analyzing the video, give a summarized voiceover script for the summarized version of this video.
+    IMPORTANT: The script MUST be of the length so that the when converted to audio is no more than ${duration} seconds long.
+    Focus mainly on the video description and transcript if its provided and do not include too much of scene descriptions.
+    ${description?"Here is the description of the video: "+description:""}
+    ${isTranscript?"Here is the transcript for the selected parts of the video: "+contentData:"Here are the selected highlights of the video: "+ contentData}
+    IMPORTANT:The script must be almost ${targetWordCount} words with is the estimated word count for the script so that the audio is no more than ${duration} seconds long.
+    NOTE: Respond ONLY with the script, do not include any other text or explanation.`;
   
-//   Video Description: ${description}
-//   ${contentType}: ${contentData}
-  
-//   IMPORTANT: The script must be EXACTLY ${targetWordCount} words (give or take 5 words). Focus mainly on the Video Description and transcript if its provided and do not include scene descriptions if its visual description.
-//   The total voiceover should be suitable for a video of about ${duration} seconds.
-  
-//   Respond ONLY with the script, do not include any other text or explanation.`;
-  
-//     const completion = await openai.chat.completions.create({
-//       model: "gpt-4",
-//       messages: [
-//         { role: "system", content: "You are a helpful assistant for video voiceover generation." },
-//         { role: "user", content: prompt }
-//       ],
-//       max_tokens: 350,
-//       temperature: 0.7
-//     });
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: "You are a professional transcript generator for voiceovers on summarized videos" },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 350,
+      temperature: 0.4
+    });
     
-//     return completion.choices[0].message.content.trim();
+    return completion.choices[0].message.content.trim();
   }
   
 
@@ -432,5 +460,6 @@ module.exports = {
     generateVoiceOverForVideo,
     getSpeechSegments,
     selectTranscriptsByImportance,
-    getVideoTranscript2
+    getVideoTranscript2,
+    getVideoHighlights2
 }

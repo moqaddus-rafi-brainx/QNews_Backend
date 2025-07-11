@@ -10,6 +10,24 @@ const openai = new OpenAI({
 });
 
 /**
+ * Get duration of video (in seconds) using ffprobe
+ * @param {string} videoUrl - URL or local path to the video
+ * @returns {Promise<number>} - Duration in seconds
+ */
+function getVideoDuration(videoUrl) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(videoUrl, (err, metadata) => {
+      if (err) {
+        return reject(`Failed to get video metadata: ${err.message}`);
+      }
+      const duration = metadata.format.duration;
+      resolve(duration);
+    });
+  });
+}
+
+
+/**
  * Extracts a portion of audio from a video buffer using ffmpeg and sends it to OpenAI for analysis.
  * @param {Buffer} videoBuffer - Buffer containing the video data
  * @returns {Promise<Object>} - Object containing detected language and news category
@@ -149,5 +167,6 @@ function getTranscriptTimestamps(result) {
 
 module.exports = {
   extractAudioAndAnalyze,
-  getTranscriptTimestamps
+  getTranscriptTimestamps,
+  getVideoDuration
 }; 

@@ -10,15 +10,17 @@ const client = new VideoIntelligenceServiceClient({
 });
 
 /**
- * Annotates a video using Google Video Intelligence API
- * @param {Buffer} fileBuffer - The video file buffer
+ * Annotates a video using Google Video Intelligence API with GS URI
+ * @param {string} gsUri - The GS URI of the video file (gs://bucket-name/file-path)
  * @param {string} languageCode - The language code for speech transcription
  * @returns {Promise<Object>} The operation result from Google Video Intelligence
  */
-async function annotateVideoWithGoogle(fileBuffer, languageCode) {
+async function annotateVideoWithGoogle(gsUri, languageCode) {
   try {
+    console.log('Starting video annotation with GS URI:', gsUri);
+    
     const request = {
-      inputContent: fileBuffer.toString('base64'),
+      inputUri: gsUri,
       features: [
         'SPEECH_TRANSCRIPTION',
         'LABEL_DETECTION',
@@ -31,27 +33,31 @@ async function annotateVideoWithGoogle(fileBuffer, languageCode) {
         }
       }
     };
+    
+    console.log('Sending request to Google Video Intelligence API...');
     const [operation] = await client.annotateVideo(request);
+    console.log('Operation started, waiting for completion...');
     const [operationResult] = await operation.promise();
+    console.log('Video annotation completed successfully');
     return operationResult;
   } catch (error) {
     console.error('Error in video annotation:', error);
     throw error;
   }
-  
 }
 
 /**
  * Processes video annotation results and extracts structured data
- * @param {Buffer} fileBuffer - The video file buffer
+ * @param {string} gsUri - The GS URI of the video file
  * @param {string} detectedLanguage - The detected language from audio analysis
  * @returns {Promise<Object>} Processed annotation results with speech transcripts, labels, and shots
  */
-async function processVideoAnnotation(fileBuffer, detectedLanguage) {
+async function processVideoAnnotation(gsUri, detectedLanguage) {
   // Use the Google Service for video annotation
-  let operationResult=null;
+  let operationResult = null;
   try {
-    operationResult = await annotateVideoWithGoogle(fileBuffer, detectedLanguage);
+    console.log('Processing video annotation with GS URI:', gsUri);
+    operationResult = await annotateVideoWithGoogle(gsUri, detectedLanguage);
     
   } catch (error) {
     console.error('Error in video annotation:', error);

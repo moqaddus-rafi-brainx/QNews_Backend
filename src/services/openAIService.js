@@ -1123,6 +1123,170 @@ Return result as JSON in this format:
 }
 
 /**
+ * Analyzes sentences for news worthiness and returns which ones should be kept in a summarized version
+ * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime
+ * @param {string} videoDescription - Description of the video for context
+ * @param {string} mainTopic - Main topic of the video
+ * @param {string} category - Category of the video
+ * @returns {Array} Array of sentence objects with isImportant boolean added
+ */
+async function analyzeSentencesForNewsWorthiness(sentences, videoDescription, mainTopic, category) {
+  if (!Array.isArray(sentences) || sentences.length === 0) {
+    return [];
+  }
+
+  console.log(`Analyzing news worthiness for ${sentences.length} sentences...`);
+
+  // If there are too many sentences, process them in chunks to avoid token limits
+  const CHUNK_SIZE = 20; // Process 20 sentences at a time
+  const allResults = [];
+
+  for (let i = 0; i < sentences.length; i += CHUNK_SIZE) {
+    const chunk = sentences.slice(i, i + CHUNK_SIZE);
+    console.log(`Processing chunk ${Math.floor(i / CHUNK_SIZE) + 1}/${Math.ceil(sentences.length / CHUNK_SIZE)} (${chunk.length} sentences)`);
+    
+    const chunkResults = await analyzeSentencesChunk(chunk, videoDescription, mainTopic, category);
+    allResults.push(...chunkResults);
+  }
+
+  console.log(`Successfully analyzed news worthiness for all ${allResults.length} sentences`);
+  return allResults;
+}
+
+async function analyzeSentencesChunk(sentences, videoDescription, mainTopic, category) {
+  // Extract all transcripts into a single text for batch analysis
+  const allTranscripts = sentences.map(sentence => sentence.transcript).join('\n');
+  const systemPrompt=`You are a news editor analyzing video transcripts to determine which sentences contain the most newsworthy information that should be kept in a short/summarized version of the news.`
+  
+  try {
+    const prompt = `Determine which sentences contain the  most important and newsworthy information that should be kept in a short/summarized version of the news.
+
+Video Context:
+- Main Topic: "${mainTopic}"
+- Category: "${category}"
+- Description: "${videoDescription || 'No description provided'}"
+
+All Transcripts to analyze:
+${allTranscripts}
+
+Return the result as JSON in this exact format:
+{
+  "sentences": [
+    {
+      "transcript": "exact transcript text",
+      "isImportant": true/false,
+      "reasoning": "brief explanation of why this sentence is important or not"
+    }
+  ]
+}
+
+IMPORTANT: 
+- Match each transcript exactly as provided
+- Return isImportant as true only for sentences that contain the most important and newsworthy information
+- Keep the reasoning concise but clear
+- Ensure all sentences from the input are included in the response`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.2,
+      max_tokens: 4000
+    });
+
+    const text = response.choices[0].message.content;
+    
+    try {
+      const result = parseOpenAIResponse(text);
+      
+      if (!result.sentences || !Array.isArray(result.sentences)) {
+        console.error('Invalid response structure:', result);
+        console.error('Raw response text:', text);
+        throw new Error('Invalid response structure: missing sentences array');
+      }
+
+      // Create a map of transcript to analysis result for quick lookup
+      const analysisMap = new Map();
+      result.sentences.forEach(item => {
+        if (item.transcript && typeof item.isImportant === 'boolean') {
+          analysisMap.set(item.transcript, {
+            isImportant: item.isImportant,
+            reasoning: item.reasoning || "No reasoning provided"
+          });
+        }
+      });
+
+      // Apply the analysis to each sentence
+      const sentencesWithImportance = sentences.map(sentence => {
+        const analysis = analysisMap.get(sentence.transcript);
+        
+        if (analysis) {
+          return {
+            ...sentence,
+            isImportant: analysis.isImportant,
+            importanceReasoning: analysis.reasoning
+          };
+        } else {
+          // Fallback if transcript not found in analysis
+          console.warn(`Transcript not found in analysis: "${sentence.transcript.substring(0, 50)}..."`);
+          return {
+            ...sentence,
+            isImportant: false,
+            importanceReasoning: "Not found in analysis - defaulting to false"
+          };
+        }
+      });
+
+      return sentencesWithImportance;
+      
+    } catch (parseError) {
+      console.error('Failed to parse OpenAI response for news worthiness analysis:', parseError);
+      console.error('Raw response length:', text.length);
+      console.error('Raw response preview:', text.substring(0, 500) + '...');
+      
+      // Check if response was truncated
+      if (text.includes('"sentences": [') && !text.includes(']')) {
+        console.error('Response appears to be truncated - JSON incomplete');
+      }
+      
+      // Fallback: assign default values based on basic relevance check
+      const sentencesWithImportance = sentences.map(sentence => {
+        const isRelevant = sentence.transcript.toLowerCase().includes(mainTopic.toLowerCase()) ||
+                          (videoDescription && sentence.transcript.toLowerCase().includes(videoDescription.toLowerCase()));
+        
+        return {
+          ...sentence,
+          isImportant: isRelevant,
+          importanceReasoning: `Fallback analysis: ${isRelevant ? 'Contains relevant keywords' : 'No relevant keywords found'}`
+        };
+      });
+      
+      return sentencesWithImportance;
+    }
+    
+  } catch (error) {
+    console.error('Failed to analyze news worthiness:', error);
+    
+    // Return sentences with default values if analysis fails
+    const sentencesWithImportance = sentences.map(sentence => ({
+      ...sentence,
+      isImportant: false,
+      importanceReasoning: "Analysis failed - defaulting to false"
+    }));
+    
+    return sentencesWithImportance;
+  }
+}
+
+/**
  * Adds words array to each sentence based on timestamp matching
  * @param {Array} sentences - Array of sentence objects with transcript, startTime, endTime
  * @param {Array} wordsList - Array of word objects with word, startTime, endTime
@@ -1540,7 +1704,331 @@ function extractLastWordTimestamps(mergedGroups) {
     .filter(word => word !== null);
 }
 
+/**
+ * Groups important sentences into meaningful chunks of 20-30 seconds
+ * @param {Array} importantSentences - Array of sentence objects with transcript, startTime, endTime, isImportant
+ * @param {string} videoDescription - Description of the video for context
+ * @param {string} mainTopic - Main topic of the video
+ * @param {string} category - Category of the video
+ * @returns {Promise<Array>} Array of grouped sentence chunks
+ */
+async function createMeaningfulChunks(importantSentences, videoDescription, mainTopic, category) {
+  if (!Array.isArray(importantSentences) || importantSentences.length === 0) {
+    return [];
+  }
 
+  console.log(`Creating meaningful chunks from ${importantSentences.length} important sentences...`);
+
+  // Sort sentences by startTime to ensure chronological order
+  const sortedSentences = [...importantSentences].sort((a, b) => 
+    parseFloat(a.startTime) - parseFloat(b.startTime)
+  );
+
+  // Prepare sentences data for OpenAI
+  const sentencesData = sortedSentences.map((sentence, index) => ({
+    id: index + 1,
+    transcript: sentence.transcript,
+    startTime: parseFloat(sentence.startTime),
+    endTime: parseFloat(sentence.endTime),
+    duration: parseFloat(sentence.endTime) - parseFloat(sentence.startTime)
+  }));
+
+  try {
+    const prompt = `Group these sentences into logical, coherent chunks that are 20-30 seconds long (give or take 5 seconds) and that can be used independently as a news segment.
+
+Video Context:
+- Main Topic: "${mainTopic}"
+- Category: "${category}"
+- Description: "${videoDescription || 'No description provided'}"
+
+Important Sentences to group:
+${sentencesData.map(s => `ID ${s.id}: "${s.transcript}" (${s.startTime}s - ${s.endTime}s, duration: ${s.duration.toFixed(1)}s)`).join('\n')}
+
+Requirements:
+1. Create chunks that are 20-30 seconds long (15-35 seconds is acceptable)
+2. Sentences within each chunk should be logically connected and meaningful together
+3. Respect the chronological order of sentences
+4. Each chunk should tell a complete thought or story segment
+NOTE: Thats not necessary to include all the sentences in the chunks. Include only those sentences that result in a chunks that can be used independently.
+Return the result as JSON in this exact format:
+{
+  "chunks": [
+    {
+      "chunkId": 1,
+      "sentences": [1, 3, 5], // IDs of sentences in this chunk
+      "startTime": 12.5, // Start time of first sentence
+      "endTime": 37.8, // End time of last sentence
+      "summary": "Brief description of what this chunk covers"
+    }
+  ]
+}
+
+IMPORTANT:
+- Use sentence IDs (not the full transcript text) in the sentences array
+- Make sure chunks are meaningful and coherent
+- Keep chunks within the 20-30 second target (15-35 seconds acceptable)`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert video editor who creates meaningful, coherent content chunks from transcript sentences. You focus on grouping the sentences into logical, coherent chunks that are 20-30 seconds long (give or take 5 seconds)."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 3000
+    });
+
+    const text = response.choices[0].message.content;
+    
+    try {
+      const result = parseOpenAIResponse(text);
+      
+      if (!result.chunks || !Array.isArray(result.chunks)) {
+        throw new Error('Invalid response structure: missing chunks array');
+      }
+
+      // Convert the AI response into actual sentence groups
+      const groupedChunks = result.chunks.map(chunk => {
+        // Get the actual sentence objects for this chunk
+        const chunkSentences = chunk.sentences.map(sentenceId => {
+          const sentence = sortedSentences.find(s => 
+            sortedSentences.indexOf(s) + 1 === sentenceId
+          );
+          return sentence;
+        }).filter(sentence => sentence); // Remove any undefined sentences
+
+        if (chunkSentences.length === 0) {
+          console.warn(`No sentences found for chunk ${chunk.chunkId}`);
+          return null;
+        }
+
+        // Calculate actual timing from the sentences
+        const actualStartTime = Math.min(...chunkSentences.map(s => parseFloat(s.startTime)));
+        const actualEndTime = Math.max(...chunkSentences.map(s => parseFloat(s.endTime)));
+        
+        // Calculate total duration by summing individual sentence durations
+        const actualDuration = chunkSentences.reduce((total, sentence) => {
+          const sentenceDuration = parseFloat(sentence.endTime) - parseFloat(sentence.startTime);
+          return total + sentenceDuration;
+        }, 0);
+
+        return {
+          chunkId: chunk.chunkId,
+          sentences: chunkSentences,
+          totalDuration: actualDuration,
+          startTime: actualStartTime,
+          endTime: actualEndTime,
+          summary: chunk.summary || "No summary provided",
+          transcript: chunkSentences.map(s => s.transcript).join(' ')
+        };
+      }).filter(chunk => chunk !== null); // Remove null chunks
+
+      console.log(`Successfully created ${groupedChunks.length} meaningful chunks`);
+      
+      // Log chunk details for debugging
+      groupedChunks.forEach(chunk => {
+        console.log(`Chunk ${chunk.chunkId}: ${chunk.totalDuration.toFixed(1)}s (${chunk.sentences.length} sentences) - ${chunk.summary}`);
+      });
+
+      return groupedChunks;
+      
+    } catch (parseError) {
+      console.error('Failed to parse OpenAI response for chunk creation:', parseError);
+      console.error('Raw response:', text);
+      
+      // Fallback: create simple chunks based on time proximity
+      return createFallbackChunks(sortedSentences);
+    }
+    
+  } catch (error) {
+    console.error('Failed to create meaningful chunks:', error);
+    
+    // Fallback: create simple chunks based on time proximity
+    return createFallbackChunks(sortedSentences);
+  }
+}
+
+/**
+ * Fallback function to create chunks when AI analysis fails
+ * @param {Array} sortedSentences - Array of sentences sorted by startTime
+ * @returns {Array} Array of grouped chunks
+ */
+function createFallbackChunks(sortedSentences) {
+  console.log('Using fallback chunk creation method...');
+  
+  const chunks = [];
+  let currentChunk = [];
+  let currentDuration = 0;
+  const targetDuration = 25; // Target 25 seconds
+  const maxDuration = 35; // Maximum 35 seconds
+  
+  for (const sentence of sortedSentences) {
+    const sentenceDuration = parseFloat(sentence.endTime) - parseFloat(sentence.startTime);
+    
+    // If adding this sentence would exceed max duration, start a new chunk
+    if (currentDuration + sentenceDuration > maxDuration && currentChunk.length > 0) {
+      // Finalize current chunk
+      const chunkStartTime = parseFloat(currentChunk[0].startTime);
+      const chunkEndTime = parseFloat(currentChunk[currentChunk.length - 1].endTime);
+      
+      chunks.push({
+        chunkId: chunks.length + 1,
+        sentences: [...currentChunk],
+        totalDuration: chunkEndTime - chunkStartTime,
+        startTime: chunkStartTime,
+        endTime: chunkEndTime,
+        summary: `Fallback chunk ${chunks.length + 1}`,
+        transcript: currentChunk.map(s => s.transcript).join(' ')
+      });
+      
+      // Start new chunk
+      currentChunk = [sentence];
+      currentDuration = sentenceDuration;
+    } else {
+      // Add to current chunk
+      currentChunk.push(sentence);
+      currentDuration += sentenceDuration;
+    }
+  }
+  
+  // Add the last chunk if it has content
+  if (currentChunk.length > 0) {
+    const chunkStartTime = parseFloat(currentChunk[0].startTime);
+    const chunkEndTime = parseFloat(currentChunk[currentChunk.length - 1].endTime);
+    
+    chunks.push({
+      chunkId: chunks.length + 1,
+      sentences: [...currentChunk],
+      totalDuration: currentDuration, // Use the accumulated duration
+      startTime: chunkStartTime,
+      endTime: chunkEndTime,
+      summary: `Fallback chunk ${chunks.length + 1}`,
+      transcript: currentChunk.map(s => s.transcript).join(' ')
+    });
+  }
+  
+  console.log(`Created ${chunks.length} fallback chunks`);
+  return chunks;
+}
+
+/**
+ * Creates highlight chunks by combining highlights sequentially based on duration constraints
+ * @param {Array} highlights - Array of highlight objects with start, end, highlightSummary properties
+ * @returns {Array} Array of grouped highlight chunks
+ */
+function createHighlightChunksByDuration(highlights) {
+  if (!Array.isArray(highlights) || highlights.length === 0) {
+    return [];
+  }
+
+  console.log(`Creating highlight chunks by duration from ${highlights.length} highlights...`);
+
+  // Sort highlights by start time to ensure chronological order
+  const sortedHighlights = [...highlights].sort((a, b) => 
+    parseFloat(a.start) - parseFloat(b.start)
+  );
+
+  const chunks = [];
+  let currentChunk = [];
+  let currentDuration = 0;
+  const minDuration = 15; // Minimum 15 seconds
+  const targetDuration = 20; // Target 20 seconds
+  const maxDuration = 30; // Maximum 30 seconds
+
+  // Add first highlight to first chunk by default
+  if (sortedHighlights.length > 0) {
+    const firstHighlight = sortedHighlights[0];
+    currentChunk = [firstHighlight];
+    currentDuration = parseFloat(firstHighlight.end) - parseFloat(firstHighlight.start);
+  }
+
+  // Process remaining highlights starting from index 1
+  for (let i = 1; i < sortedHighlights.length; i++) {
+    const highlight = sortedHighlights[i];
+    const highlightDuration = parseFloat(highlight.end) - parseFloat(highlight.start);
+
+    // Check if current chunk has reached target duration BEFORE adding new highlight
+    if (currentDuration >= targetDuration && currentChunk.length > 0) {
+      // Finalize current chunk
+      const chunkStartTime = parseFloat(currentChunk[0].start);
+      const chunkEndTime = parseFloat(currentChunk[currentChunk.length - 1].end);
+      
+      chunks.push({
+        chunkId: chunks.length + 1,
+        highlights: [...currentChunk],
+        totalDuration: currentDuration, // Use the calculated currentDuration
+        startTime: chunkStartTime,
+        endTime: chunkEndTime,
+        summary: `Chunk ${chunks.length + 1}: ${currentChunk.length} highlights combined`,
+        highlightSummaries: currentChunk.map(h => h.highlightSummary).join(' ')
+      });
+      
+      // Start new chunk with current highlight
+      currentChunk = [highlight];
+      currentDuration = highlightDuration;
+    }
+    // Check if adding this highlight would exceed max duration BEFORE adding it
+    else if (currentDuration + highlightDuration > maxDuration && currentChunk.length > 0) {
+      // Finalize current chunk if it meets minimum duration
+      if (currentDuration >= minDuration) {
+        const chunkStartTime = parseFloat(currentChunk[0].start);
+        const chunkEndTime = parseFloat(currentChunk[currentChunk.length - 1].end);
+        
+        chunks.push({
+          chunkId: chunks.length + 1,
+          highlights: [...currentChunk],
+          totalDuration: currentDuration, // Use the calculated currentDuration
+          startTime: chunkStartTime,
+          endTime: chunkEndTime,
+          summary: `Chunk ${chunks.length + 1}: ${currentChunk.length} highlights combined`,
+          highlightSummaries: currentChunk.map(h => h.highlightSummary).join(' ')
+        });
+      }
+      
+      // Start new chunk with current highlight
+      currentChunk = [highlight];
+      currentDuration = highlightDuration;
+    } else {
+      // Add to current chunk
+      currentChunk.push(highlight);
+      currentDuration += highlightDuration;
+    }
+  }
+
+  // Handle the last chunk if it has content
+  if (currentChunk.length > 0) {
+    const chunkStartTime = parseFloat(currentChunk[0].start);
+    const chunkEndTime = parseFloat(currentChunk[currentChunk.length - 1].end);
+    
+    // Only add if it meets minimum duration or it's the only chunk
+    if (currentDuration >= minDuration || chunks.length === 0) {
+      chunks.push({
+        chunkId: chunks.length + 1,
+        highlights: [...currentChunk],
+        totalDuration: currentDuration, // Use the calculated currentDuration
+        startTime: chunkStartTime,
+        endTime: chunkEndTime,
+        summary: `Chunk ${chunks.length + 1}: ${currentChunk.length} highlights combined`,
+        highlightSummaries: currentChunk.map(h => h.highlightSummary).join(' ')
+      });
+    }
+  }
+
+  console.log(`Created ${chunks.length} highlight chunks by duration`);
+  
+  // Log chunk details for debugging
+  chunks.forEach(chunk => {
+    console.log(`Duration Chunk ${chunk.chunkId}: ${chunk.totalDuration.toFixed(1)}s (${chunk.highlights.length} highlights) - ${chunk.summary}`);
+  });
+
+  return chunks;
+}
 
 module.exports = {
   parseOpenAIResponse,
@@ -1554,8 +2042,12 @@ module.exports = {
   addPunctuationToText,
   applyPunctuationToTranscripts,
   analyzeSentenceImportance,
+  analyzeSentencesForNewsWorthiness,
+  createMeaningfulChunks,
   addWordsToSentences,
   createSubtitleChunks,
   createSubtitleChunksWithPreciseMatching,
-  extractLastWordTimestamps
+  extractLastWordTimestamps,
+  createMeaningfulChunks,
+  createHighlightChunksByDuration,
 };

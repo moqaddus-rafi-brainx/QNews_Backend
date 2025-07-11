@@ -1,7 +1,7 @@
 const { OpenAI } = require('openai');
 require('dotenv').config();
 const axios = require('axios');
-const { uploadAudioToCloudinary } = require('./cloudinaryUpload');
+const { uploadAudioBufferAndGetSignedUrl } = require('./googleStorageService');
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const openai = new OpenAI({
@@ -26,11 +26,25 @@ async function convertTextToSpeech(text, voice) {
         }
       );
   
-      // Upload audio buffer to Cloudinary instead of saving locally
-      const result = await uploadAudioToCloudinary(response.data, 'voiceovers');
-      const audioUrl=result.secure_url;
-      const duration=result.duration;
-      return {audioUrl,duration};
+      // Upload audio buffer to Google Cloud Storage
+      const result = await uploadAudioBufferAndGetSignedUrl(
+        response.data, 
+        'voiceover.mp3', 
+        'audio/mp3', 
+        60 // 60 minutes expiration
+      );
+      
+      if (!result.success) {
+        throw new Error(`Failed to upload audio: ${result.error}`);
+      }
+      
+      const audioUrl = result.signedUrl;
+      // Note: Google Storage doesn't provide duration, so we'll need to calculate it differently
+      // For now, we'll estimate duration based on text length (roughly 150 words per minute)
+      const wordCount = text.split(' ').length;
+      const duration = (wordCount / 150) * 60; // Convert to seconds
+      
+      return {audioUrl, duration};
     } catch (error) {
       if (error.response?.data) {
         const errorText = Buffer.from(error.response.data).toString('utf-8');
@@ -105,7 +119,7 @@ The total voiceover should be suitable for a video of about ${duration} seconds.
 Respond ONLY with the script, do not include any other text or explanation.`;
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-4",
+    model: "gpt-4o",
     messages: [
       { role: "system", content: "You are a helpful assistant for video voiceover generation." },
       { role: "user", content: prompt }

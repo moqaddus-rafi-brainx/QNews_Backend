@@ -5,7 +5,7 @@ require('dotenv').config();
 defaultClient.authentications['DeveloperKey'].apiKey = process.env.SHOTSTACK_API_KEY;
 
 const editApi = new Shotstack.EditApi();
-
+const { getVideoDuration } = require('./audioAnalysisService');
 
 /**
  * Wait for render to complete by polling the status using direct API calls
@@ -164,8 +164,10 @@ async function removeClipFromVideo(videoSrc, segmentsToKeep, totalDuration) {
  * @param {number} audioVolume - Audio volume level (0.0 to 1.0, default: 1.0)
  * @returns {Promise<Object>} - The completed render response with video URL
  */
-async function overlayAudioOnVideo(videoSrc, audioSrc, duration, videoDuration, audioStartTime = 2, audioVolume = 1.0) {
+async function overlayAudioOnVideo(videoSrc, audioSrc, duration, videoDuration, audioStartTime = 0.5, audioVolume = 1.0) {
   // Validate input parameters
+  const audioDuration=await getVideoDuration(audioSrc);
+  console.log(audioDuration);
   if (!videoSrc || typeof videoSrc !== 'string') {
     throw new Error("Invalid video source URL");
   }
@@ -178,7 +180,7 @@ async function overlayAudioOnVideo(videoSrc, audioSrc, duration, videoDuration, 
     throw new Error("videoDuration must be a positive number");
   }
 
-  if (typeof duration !== 'number' || duration <= 0) {
+  if (typeof audioDuration !== 'number' || audioDuration <= 0) {
     throw new Error("duration must be a positive number");
   }
 
@@ -194,12 +196,12 @@ async function overlayAudioOnVideo(videoSrc, audioSrc, duration, videoDuration, 
   let audioSpeed = 1.0;
   const availableAudioTime = videoDuration - audioStartTime;
   
-  if (duration > availableAudioTime) {
-    audioSpeed = duration / availableAudioTime;
-    console.log(`Audio duration (${duration}s) is longer than available video time (${availableAudioTime}s)`);
+  if (audioDuration > availableAudioTime) {
+    audioSpeed = audioDuration / availableAudioTime;
+    console.log(`Audio duration (${audioDuration}s) is longer than available video time (${availableAudioTime}s)`);
     console.log(`Adjusting audio speed to ${audioSpeed.toFixed(2)}x`);
   } else {
-    console.log(`Audio duration (${duration}s) fits within available video time (${availableAudioTime}s)`);
+    console.log(`Audio duration (${audioDuration}s) fits within available video time (${availableAudioTime}s)`);
   }
 
   const edit = {

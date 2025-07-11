@@ -1,8 +1,8 @@
 const path = require('path');
 const multer = require('multer');
 const { LANGUAGE_NAMES } = require('../constants/languages');
-const { extractAudioAndAnalyze, getTranscriptTimestamps } = require('../services/audioAnalysisService');
-const { groupRelatedTranscripts,analyzeMainTopic,mergeCloseTranscripts,createSubtitleChunks,applyPunctuationToTranscripts,divideTranscriptsIntoSentencesWithAI,analyzeSentenceImportance,extractLastWordTimestamps } = require('../services/openAIService');
+const { extractAudioAndAnalyze, getTranscriptTimestamps,getVideoDuration } = require('../services/audioAnalysisService');
+const { groupRelatedTranscripts,analyzeMainTopic,createHighlightChunksByDuration,mergeCloseTranscripts,createSubtitleChunks,applyPunctuationToTranscripts,divideTranscriptsIntoSentencesWithAI,analyzeSentenceImportance,extractLastWordTimestamps,analyzeSentencesForNewsWorthiness,createMeaningfulChunks } = require('../services/openAIService');
 const { analyzeVideoLabels, analyzeShots ,analyzeShotRelevance,separateAndMergeRelevantShots,selectMostRelevantShotsWithin30sGreedy} = require('../services/visualAnalysisService');
 const { uploadVideoToCloudinary } = require('../services/cloudinaryUpload');
 const { removeClipFromVideo,overlayAudioOnVideo,applySubtitlesWithShotstack } = require('../services/videoTrimmingService');
@@ -10,7 +10,9 @@ const { annotateVideoWithGoogle, processVideoAnnotation } = require('../services
 const { generateVoiceOver, convertTextToSpeech } = require('../services/voiceOverGenerationService');
 const { processVideoWithSubtitles, generateSRTFromTranscripts,generateSRTFromChunks,processVideoWithChunkedSubtitles } = require('../services/subtitleGenerationService');
 const { uploadVideoToTwelveLabs } = require('../services/twelveLabsService');
-const { getVideoHighlights,getVideoDetails, getVideoTranscript,getVideoTranscript2, getImportantTrancriptChunks,selectMostImportantHighlights,generateVoiceOverForVideo,getSpeechSegments,createIndex,selectTranscriptsByImportance } = require('../services/twelveLabsService');
+const { getVideoHighlights,getVideoDetails, getVideoTranscript,getVideoTranscript2, getImportantTrancriptChunks,selectMostImportantHighlights,generateVoiceOverForVideo,getSpeechSegments,createIndex,selectTranscriptsByImportance,getVideoHighlights2 } = require('../services/twelveLabsService');
+
+const { generateReadSignedUrl } = require('../services/googleStorageService');
 
 require('dotenv').config();
 
@@ -673,21 +675,31 @@ async function testingUsingPunctuationAndDiffModel(req,res){
 async function summarizeVideo5(req, res) {
   try {
    
-    if (!req.file) {
-      return res.status(400).json({ error: 'No video file uploaded' });
+    const filePath = req.body.filePath;
+    const description = req.body.summary || null;
+    const gsUri=`gs://${process.env.GOOGLE_STORAGE_BUCKET}/${filePath}`;
+    console.log(gsUri);
+    // Generate signed URL for reading the video file
+    const signedUrlResult = await generateReadSignedUrl(filePath, 60); // 60 minutes expiration
+    
+    if (!signedUrlResult.success) {
+      return res.status(400).json({ 
+        error: 'Failed to generate signed URL for video access',
+        details: signedUrlResult.error 
+      });
     }
-    const fileBuffer = req.file.buffer;
-    const description=req.body.summary || null;
-    console.log(description);
-    const url = await uploadVideoToCloudinary(fileBuffer);
-    //const url="https://res.cloudinary.com/ds0opfsmi/video/upload/v1751966240/my_videos/osjftnkgtz7oniz2w9ik.mp4";
-    //const videoId="6860f40db1b32788e03cf8f1";
+    
+    const url = signedUrlResult.signedUrl; // Use the signed URL for secure access
+    console.log('Generated signed URL for video access:', url);
+    console.log('Description:', description);
+    
+    //const videoId="6870e7608bf3dbda64615c38";
     const videoId = await uploadVideoToTwelveLabs(url);
     console.log(videoId);
-    const result = await getVideoTranscript(videoId,description);
-    const transcripts=result.transcripts;
-    const language=result.language;
-    const {summary,details} = await getVideoDetails(videoId,description);
+    const result = await getVideoTranscript(videoId, description);
+    const transcripts = result.transcripts;
+    const language = result.language;
+    const {summary, details} = await getVideoDetails(videoId, description);
     console.log(summary);
     console.log(details);
     
@@ -721,14 +733,386 @@ async function summarizeVideo5(req, res) {
     let sentences=null;
     let speechTranscripts=null;
     let subtitleChunks=null;
+    let newsWorthiness=null;
+    let importantSentences=[];
+    let meaningfulChunks=null;
+    let processedChunks = [];
+    const videoDuration=await getVideoDuration(url);
+    console.log(videoDuration);
+    if(videoDuration>180){
+      if(result.is_speaker){
+        //Speaker present,no need to apply voiceover
+        const { speechTranscripts: googleSpeechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(gsUri,language);
+      speechTranscripts = googleSpeechTranscripts;
+      if (!speechTranscripts || speechTranscripts.length === 0) {
+        console.warn('No speech transcripts found in video from Google API, trying to use TwelveLabs transcripts');
+        
+        // Try to use TwelveLabs transcripts as fallback
+        if (transcripts && transcripts.length > 0) {
+          console.log('Using TwelveLabs transcripts as fallback');
+          speechTranscripts = transcripts;
+        } else {
+          console.warn('No speech transcripts found from either Google API or TwelveLabs');
+          // Set default values and skip transcript processing
+          sentences = [];
+          mergedGroups = [];
+          segmentsToKeep = [];
+          clippedVideoUrl = url; // Use original video
+          videoWithAudioUrl = url;
+        }
+      }
+      if (speechTranscripts && speechTranscripts.length > 0) {
+        const transcriptTimestamps = getTranscriptTimestamps(speechTranscripts);
+        const punctuatedTranscripts=await applyPunctuationToTranscripts(transcriptTimestamps);
+        sentences=await divideTranscriptsIntoSentencesWithAI(punctuatedTranscripts,speechTranscripts);
+        newsWorthiness=await analyzeSentencesForNewsWorthiness(sentences,description,parsedDetails.mainTopic,parsedDetails.category);
     
+        // Filter to get only important sentences
+        
+        for (const sentence of newsWorthiness) {  
+          if (sentence.isImportant === true) {
+            importantSentences.push(sentence);
+          }
+        }
+        console.log(`Found ${importantSentences.length} important sentences out of ${newsWorthiness.length} total sentences`);
+
+        meaningfulChunks=await createMeaningfulChunks(importantSentences,description,parsedDetails.mainTopic,parsedDetails.category);
+        
+        //PROCESSING EACH CHUNK INTO AN INDEPENDENT CLIP.
+        
+        if (meaningfulChunks && meaningfulChunks.length > 0) {
+          console.log(`Processing ${meaningfulChunks.length} meaningful chunks...`);
+          
+          for (let i = 0; i < meaningfulChunks.length; i++) {
+            const chunk = meaningfulChunks[i];
+            console.log(`Processing chunk ${i + 1}/${meaningfulChunks.length}: ${chunk.summary}`);
+            
+            try {
+              // Step 1: Merge close transcripts within the chunk
+              const mergedChunkTranscripts = mergeCloseTranscripts(chunk.sentences);
+              console.log(`Chunk ${i + 1}: Merged into ${mergedChunkTranscripts.length} groups`);
+              
+              // Step 2: Convert merged groups to segments for video trimming
+              const chunkSegments = [];
+              for (const group of mergedChunkTranscripts) {
+                if (group && group.length > 0) {
+                  const startTime = group[0].startTime;
+                  const endTime = group[group.length - 1].endTime;
+                  
+                  chunkSegments.push({
+                    startTime: startTime,
+                    endTime: endTime + 0.3
+                  });
+                }
+              }
+              
+              console.log(`Chunk ${i + 1}: Created ${chunkSegments.length} segments for trimming`);
+              
+              // Step 3: Video trimming
+              let chunkClippedVideoUrl = url; // Default to original video
+              if (chunkSegments.length > 0) {
+                try {
+                  const renderId = await removeClipFromVideo(url, chunkSegments, chunk.totalDuration);
+                  chunkClippedVideoUrl = renderId.url;
+                  console.log(`Chunk ${i + 1}: Video trimming successful`);
+                } catch (trimError) {
+                  console.error(`Chunk ${i + 1}: Video trimming failed, using original video:`, trimError.message);
+                  chunkClippedVideoUrl = url;
+                }
+              } else {
+                console.warn(`Chunk ${i + 1}: No segments to keep, using original video`);
+              }
+              
+              // Step 4: Create subtitle chunks
+              const chunkSubtitleChunks = createSubtitleChunks(mergedChunkTranscripts);
+              console.log(`Chunk ${i + 1}: Created ${chunkSubtitleChunks.length} subtitle chunks`);
+              
+              // Step 5: Apply subtitles
+              let chunkFinalVideoUrl = chunkClippedVideoUrl; // Default to clipped video
+              if (chunkSubtitleChunks.length > 0) {
+                try {
+                  const subtitleResult = await processVideoWithChunkedSubtitles(chunkClippedVideoUrl, chunkSubtitleChunks);
+                  
+                  if (subtitleResult.success) {
+                    chunkFinalVideoUrl = subtitleResult.cloudinaryUrl;
+                    console.log(`Chunk ${i + 1}: Subtitles applied successfully`);
+                  } else {
+                    console.error(`Chunk ${i + 1}: Failed to apply subtitles:`, subtitleResult.error);
+                  }
+                } catch (subtitleError) {
+                  console.error(`Chunk ${i + 1}: Error applying subtitles:`, subtitleError.message);
+                }
+              } else {
+                console.warn(`Chunk ${i + 1}: No subtitle chunks to apply`);
+              }
+              
+              // Store the processed chunk result
+              processedChunks.push({
+                chunkId: chunk.chunkId,
+                summary: chunk.summary,
+                totalDuration: chunk.totalDuration,
+                startTime: chunk.startTime,
+                endTime: chunk.endTime,
+                transcript: chunk.transcript,
+                sentences: chunk.sentences,
+                sentencesCount: chunk.sentences.length,
+                segmentsCount: chunkSegments.length,
+                subtitleChunksCount: chunkSubtitleChunks.length,
+                originalVideoUrl: url,
+                clippedVideoUrl: chunkClippedVideoUrl,
+                finalVideoUrl: chunkFinalVideoUrl,
+                processingStatus: 'success'
+              });
+              
+              console.log(`Chunk ${i + 1}: Processing completed successfully`);
+              
+            } catch (chunkError) {
+              console.error(`Chunk ${i + 1}: Processing failed:`, chunkError);
+              
+              // Store failed chunk result
+              processedChunks.push({
+                chunkId: chunk.chunkId,
+                summary: chunk.summary,
+                totalDuration: chunk.totalDuration,
+                startTime: chunk.startTime,
+                endTime: chunk.endTime,
+                transcript: chunk.transcript,
+                sentences: chunk.sentences,
+                sentencesCount: chunk.sentences.length,
+                originalVideoUrl: url,
+                finalVideoUrl: url, // Fallback to original video
+                processingStatus: 'failed',
+                error: chunkError.message
+              });
+            }
+          }
+          
+          console.log(`Completed processing all ${processedChunks.length} chunks`);
+        } else {
+          console.warn('No meaningful chunks to process');
+        }
+        
+      }
+      res.json({
+        language: parsedDetails.language == "Unknown" ? language : parsedDetails.language,
+          mainTopic: parsedDetails.mainTopic,
+          category: parsedDetails.category,
+          summary,
+          originalVideoUrl: url,
+          processedChunks: processedChunks,
+          totalChunks: processedChunks.length,
+      });
+      return;
+
+      }
+      else{
+        //Speaker not present,apply voiceover
+        videoDetails = await getVideoHighlights2(videoId,description);
+        console.log(videoDetails.highlights);
+        const highlightsChunks=createHighlightChunksByDuration(videoDetails.highlights);
+        console.log(highlightsChunks);
+        
+        // Process each chunk for video trimming
+        const processedChunks = [];
+        
+        for (let i = 0; i < highlightsChunks.length; i++) {
+          const chunk = highlightsChunks[i];
+          console.log(`Processing chunk ${i + 1}/${highlightsChunks.length}: ${chunk.summary}`);
+          
+          try {
+            // Convert chunk highlights to segments for video trimming
+            const chunkSegments = [];
+            for (const highlight of chunk.highlights) {
+              chunkSegments.push({
+                startTime: parseFloat(highlight.start),
+                endTime: parseFloat(highlight.end)
+              });
+            }
+
+            // Deduplicate overlapping segments
+            const uniqueSegments = [];
+            const seenSegments = new Set();
+
+            for (const segment of chunkSegments) {
+              const segmentKey = `${segment.startTime}-${segment.endTime}`;
+              if (!seenSegments.has(segmentKey)) {
+                seenSegments.add(segmentKey);
+                uniqueSegments.push(segment);
+              }
+            }
+
+            console.log(`Chunk ${i + 1}: Created ${chunkSegments.length} segments, deduplicated to ${uniqueSegments.length} unique segments`);
+
+            // Video trimming for this chunk
+            let chunkClippedVideoUrl = url; // Default to original video
+            if (uniqueSegments.length > 0) {
+              console.log('Unique segments for trimming:', uniqueSegments);
+              try {
+                const renderId = await removeClipFromVideo(url, uniqueSegments, chunk.totalDuration);
+                chunkClippedVideoUrl = renderId.url;
+                console.log(`Chunk ${i + 1}: Video trimming successful - ${chunkClippedVideoUrl}`);
+              } catch (trimError) {
+                console.error(`Chunk ${i + 1}: Video trimming failed, using original video:`, trimError.message);
+                chunkClippedVideoUrl = url;
+              }
+            } else {
+              console.warn(`Chunk ${i + 1}: No segments to keep, using original video`);
+            }
+            
+            // Store the processed chunk result
+            processedChunks.push({
+              chunkId: chunk.chunkId,
+              summary: chunk.summary,
+              totalDuration: chunk.totalDuration,
+              startTime: chunk.startTime,
+              endTime: chunk.endTime,
+              highlightSummaries: chunk.highlightSummaries,
+              highlightsCount: chunk.highlights.length,
+              highlights: chunk.highlights,
+              segmentsCount: uniqueSegments.length, // Use uniqueSegments count
+              originalVideoUrl: url,
+              clippedVideoUrl: chunkClippedVideoUrl,
+              processingStatus: 'success'
+            });
+            
+            console.log(`Chunk ${i + 1}: Processing completed successfully`);
+            
+          } catch (chunkError) {
+            console.error(`Chunk ${i + 1}: Processing failed:`, chunkError);
+            
+            // Store failed chunk result
+            processedChunks.push({
+              chunkId: chunk.chunkId,
+              summary: chunk.summary,
+              totalDuration: chunk.totalDuration,
+              startTime: chunk.startTime,
+              endTime: chunk.endTime,
+              highlightSummaries: chunk.highlightSummaries,
+              highlightsCount: chunk.highlights.length,
+              highlights: chunk.highlights,
+              originalVideoUrl: url,
+              clippedVideoUrl: url, // Fallback to original video
+              processingStatus: 'failed',
+              error: chunkError.message
+            });
+          }
+        }
+        
+        console.log(`Completed video trimming for all ${processedChunks.length} chunks`);
+        
+        // Check if transcripts exist
+        if (transcripts && transcripts.length > 0) {
+          console.log('Transcripts found, processing voiceover for each chunk...');
+          
+          // Process voiceover for each chunk
+          for (let i = 0; i < processedChunks.length; i++) {
+            const chunk = processedChunks[i];
+            
+            if (chunk.processingStatus === 'failed') {
+              console.log(`Skipping voiceover for chunk ${i + 1} due to previous failure`);
+              continue;
+            }
+            
+            try {
+              console.log(`Processing voiceover for chunk ${i + 1}/${processedChunks.length}`);
+              
+              // Find transcripts that fall within this chunk's time range
+              const chunkTranscripts = transcripts.filter(transcript => {
+                const transcriptStart = parseFloat(transcript.startTime || transcript.start);
+                const transcriptEnd = parseFloat(transcript.endTime || transcript.end);
+                
+                // Check if transcript overlaps with chunk time range
+                return (transcriptStart >= chunk.startTime && transcriptStart <= chunk.endTime) ||
+                       (transcriptEnd >= chunk.startTime && transcriptEnd <= chunk.endTime) ||
+                       (transcriptStart <= chunk.startTime && transcriptEnd >= chunk.endTime);
+              });
+              
+              console.log(`Chunk ${i + 1}: Found ${chunkTranscripts.length} transcripts within time range`);
+              
+              let voiceOverScript = null;
+              
+              if (chunkTranscripts.length > 0) {
+                // Combine transcript texts
+                const transcriptTexts = chunkTranscripts.map(t => t.transcript || t.highlightSummary).join('\n');
+                
+                // Generate voiceover script using description, selected transcripts, and chunk summary
+                voiceOverScript = await generateVoiceOverForVideo(
+                  true, // hasTranscripts
+                  description,
+                  transcriptTexts,
+                  [], // segments (not needed for voiceover generation)
+                  chunk.totalDuration,
+                  videoId
+                );
+              } else {
+                // No transcripts found, use chunk highlights for voiceover
+                voiceOverScript = await generateVoiceOverForVideo(
+                  false, // noTranscripts
+                  description,
+                  chunk.highlightSummaries,
+                  [], // segments (not needed for voiceover generation)
+                  chunk.totalDuration,
+                  videoId
+                );
+              }
+              
+              // Apply voiceover to the clipped video for this chunk
+              if (voiceOverScript) {
+                const { audioUrl, duration } = await convertTextToSpeech(voiceOverScript);
+                const videoWithAudioId = await overlayAudioOnVideo(
+                  chunk.clippedVideoUrl, 
+                  audioUrl, 
+                  duration, 
+                  chunk.totalDuration
+                );
+                
+                // Update the chunk with final video URL
+                chunk.finalVideoUrl = videoWithAudioId.url;
+                chunk.processingStatus = 'completed';
+                chunk.voiceoverApplied = true;
+                chunk.transcriptsFound = chunkTranscripts.length;
+                
+                console.log(`Chunk ${i + 1}: Voiceover applied successfully`);
+              } else {
+                console.warn(`Chunk ${i + 1}: No voiceover script generated`);
+                chunk.processingStatus = 'completed';
+                chunk.voiceoverApplied = false;
+                chunk.transcriptsFound = chunkTranscripts.length;
+              }
+              
+            } catch (voiceoverError) {
+              console.error(`Chunk ${i + 1}: Voiceover processing failed:`, voiceoverError);
+              chunk.processingStatus = 'voiceover_failed';
+              chunk.error = voiceoverError.message;
+            }
+          }
+          
+          console.log('Voiceover processing completed for all chunks');
+        } else {
+          console.log('No transcripts found, skipping voiceover processing');
+        }
+        
+        return res.json({
+          language: parsedDetails.language == "Unknown" ? language : parsedDetails.language,
+          mainTopic: parsedDetails.mainTopic,
+          category: parsedDetails.category,
+          summary,
+          originalVideoUrl: url,
+          highlightChunks: highlightsChunks,
+          processedChunks: processedChunks,
+          totalChunks: highlightsChunks.length,
+          hasTranscripts: transcripts && transcripts.length > 0
+        });
+        
+      }
+    }
       //Speaker present,no need to apply voiceover
       if(result.is_speaker){
         try{
           if(parsedDetails.language=="Unknown"){
             parsedDetails.language=language;
           }
-          const { speechTranscripts: googleSpeechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer,parsedDetails.language);
+          const { speechTranscripts: googleSpeechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(gsUri,parsedDetails.language);
           speechTranscripts = googleSpeechTranscripts;
           
         }

@@ -10,8 +10,8 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Import Cloudinary upload function
-const { uploadVideoToCloudinary } = require('./cloudinaryUpload');
+// Import Google Storage upload function
+const { uploadVideoBufferAndGetSignedUrl } = require('./googleStorageService');
 
 /**
  * Downloads a video from URL and saves it temporarily
@@ -115,12 +115,22 @@ async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFil
     tempFiles.push(outputVideoPath);
     console.log('Subtitles applied successfully');
 
-    // Step 4: Upload video to Cloudinary
-    console.log('Uploading video to Cloudinary...');
+    // Step 4: Upload video to Google Cloud Storage
+    console.log('Uploading video to Google Cloud Storage...');
     const videoBuffer = await fs.readFile(outputVideoPath);
-    const cloudinaryUrl = await uploadVideoToCloudinary(videoBuffer);
-    console.log('Video uploaded to Cloudinary successfully');
-    console.log('cloudinaryUrl:', cloudinaryUrl);
+    const uploadResult = await uploadVideoBufferAndGetSignedUrl(
+      videoBuffer,
+      `video_with_subs_${Date.now()}.mp4`,
+      'video/mp4',
+      60 // 60 minutes expiration
+    );
+    
+    if (!uploadResult.success) {
+      throw new Error(`Failed to upload video: ${uploadResult.error}`);
+    }
+    
+    console.log('Video uploaded to Google Cloud Storage successfully');
+    console.log('Signed URL:', uploadResult.signedUrl);
 
     // Step 5: Clean up temporary files
     console.log('Cleaning up temporary files...');
@@ -128,7 +138,9 @@ async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFil
 
     return {
       success: true,
-      cloudinaryUrl,
+      cloudinaryUrl: uploadResult.signedUrl, // Keep the same property name for compatibility
+      gsUri: uploadResult.gsUri,
+      filePath: uploadResult.filePath,
       processingDetails: {
         originalVideoUrl: videoUrl,
         targetLanguage,
@@ -139,7 +151,7 @@ async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFil
           ...(translateToEnglish ? ['Transcripts translated to English'] : []),
           'SRT subtitles generated',
           'Subtitles applied using FFmpeg',
-          'Video uploaded to Cloudinary',
+          'Video uploaded to Google Cloud Storage',
           'Temporary files cleaned up'
         ]
       }
@@ -287,12 +299,22 @@ async function processVideoWithSubtitles(videoUrl, relevantContent, srtFilename 
     tempFiles.push(outputVideoPath);
     console.log('Subtitles applied successfully');
 
-    // Step 4: Upload video to Cloudinary
-    console.log('Uploading video to Cloudinary...');
+    // Step 4: Upload video to Google Cloud Storage
+    console.log('Uploading video to Google Cloud Storage...');
     const videoBuffer = await fs.readFile(outputVideoPath);
-    const cloudinaryUrl = await uploadVideoToCloudinary(videoBuffer);
-    console.log('Video uploaded to Cloudinary successfully');
-    console.log('cloudinaryUrl:', cloudinaryUrl);
+    const uploadResult = await uploadVideoBufferAndGetSignedUrl(
+      videoBuffer,
+      `video_with_subs_${Date.now()}.mp4`,
+      'video/mp4',
+      60 // 60 minutes expiration
+    );
+    
+    if (!uploadResult.success) {
+      throw new Error(`Failed to upload video: ${uploadResult.error}`);
+    }
+    
+    console.log('Video uploaded to Google Cloud Storage successfully');
+    console.log('Signed URL:', uploadResult.signedUrl);
 
     // Step 5: Clean up temporary files
     console.log('Cleaning up temporary files...');
@@ -300,7 +322,9 @@ async function processVideoWithSubtitles(videoUrl, relevantContent, srtFilename 
 
     return {
       success: true,
-      cloudinaryUrl,
+      cloudinaryUrl: uploadResult.signedUrl, // Keep the same property name for compatibility
+      gsUri: uploadResult.gsUri,
+      filePath: uploadResult.filePath,
       processingDetails: {
         originalVideoUrl: videoUrl,
         subtitleCount: relevantContent.length,
@@ -312,7 +336,7 @@ async function processVideoWithSubtitles(videoUrl, relevantContent, srtFilename 
           ...(translateToEnglish ? ['Transcripts translated to English'] : []),
           'SRT subtitles generated',
           'Subtitles applied using FFmpeg',
-          'Video uploaded to Cloudinary',
+          'Video uploaded to Google Cloud Storage',
           'Temporary files cleaned up'
         ]
       }
