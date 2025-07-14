@@ -495,14 +495,15 @@ async function summarizeVideo5(req, res) {
         if (meaningfulChunks && meaningfulChunks.length > 0) {
           console.log(`Processing ${meaningfulChunks.length} meaningful chunks...`);
           
-          for (let i = 0; i < meaningfulChunks.length; i++) {
-            const chunk = meaningfulChunks[i];
-            console.log(`Processing chunk ${i + 1}/${meaningfulChunks.length}: ${chunk.summary}`);
+          // Process all chunks in parallel (including subtitle processing)
+          const chunkProcessingPromises = meaningfulChunks.map(async (chunk, index) => {
+            const i = index + 1;
+            console.log(`Processing chunk ${i}/${meaningfulChunks.length}: ${chunk.summary}`);
             
             try {
               // Step 1: Merge close transcripts within the chunk
               const mergedChunkTranscripts = mergeCloseTranscripts(chunk.sentences);
-              console.log(`Chunk ${i + 1}: Merged into ${mergedChunkTranscripts.length} groups`);
+              console.log(`Chunk ${i}: Merged into ${mergedChunkTranscripts.length} groups`);
               
               // Step 2: Convert merged groups to segments for video trimming
               const chunkSegments = [];
@@ -518,7 +519,7 @@ async function summarizeVideo5(req, res) {
                 }
               }
               
-              console.log(`Chunk ${i + 1}: Created ${chunkSegments.length} segments for trimming`);
+              console.log(`Chunk ${i}: Created ${chunkSegments.length} segments for trimming`);
               
               // Step 3: Video trimming
               let chunkClippedVideoUrl = url; // Default to original video
@@ -526,40 +527,40 @@ async function summarizeVideo5(req, res) {
                 try {
                   const renderId = await removeClipFromVideo(url, chunkSegments, chunk.totalDuration);
                   chunkClippedVideoUrl = renderId.url;
-                  console.log(`Chunk ${i + 1}: Video trimming successful`);
+                  console.log(`Chunk ${i}: Video trimming successful`);
                 } catch (trimError) {
-                  console.error(`Chunk ${i + 1}: Video trimming failed, using original video:`, trimError.message);
+                  console.error(`Chunk ${i}: Video trimming failed, using original video:`, trimError.message);
                   chunkClippedVideoUrl = url;
                 }
               } else {
-                console.warn(`Chunk ${i + 1}: No segments to keep, using original video`);
+                console.warn(`Chunk ${i}: No segments to keep, using original video`);
               }
               
               // Step 4: Create subtitle chunks
               const chunkSubtitleChunks = createSubtitleChunks(mergedChunkTranscripts);
-              console.log(`Chunk ${i + 1}: Created ${chunkSubtitleChunks.length} subtitle chunks`);
+              console.log(`Chunk ${i}: Created ${chunkSubtitleChunks.length} subtitle chunks`);
               
-              // Step 5: Apply subtitles
+              // Step 5: Apply subtitles (now in parallel)
               let chunkFinalVideoUrl = chunkClippedVideoUrl; // Default to clipped video
               if (chunkSubtitleChunks.length > 0) {
                 try {
-                  const subtitleResult = await processVideoWithChunkedSubtitles(chunkClippedVideoUrl, chunkSubtitleChunks);
+                  const subtitleResult = await processVideoWithChunkedSubtitles(chunkClippedVideoUrl, chunkSubtitleChunks, chunk.chunkId);
                   
                   if (subtitleResult.success) {
                     chunkFinalVideoUrl = subtitleResult.cloudinaryUrl;
-                    console.log(`Chunk ${i + 1}: Subtitles applied successfully`);
+                    console.log(`Chunk ${i}: Subtitles applied successfully`);
                   } else {
-                    console.error(`Chunk ${i + 1}: Failed to apply subtitles:`, subtitleResult.error);
+                    console.error(`Chunk ${i}: Failed to apply subtitles:`, subtitleResult.error);
                   }
                 } catch (subtitleError) {
-                  console.error(`Chunk ${i + 1}: Error applying subtitles:`, subtitleError.message);
+                  console.error(`Chunk ${i}: Error applying subtitles:`, subtitleError.message);
                 }
               } else {
-                console.warn(`Chunk ${i + 1}: No subtitle chunks to apply`);
+                console.warn(`Chunk ${i}: No subtitle chunks to apply`);
               }
               
-              // Store the processed chunk result
-              processedChunks.push({
+              // Return the processed chunk result
+              return {
                 chunkId: chunk.chunkId,
                 summary: chunk.summary,
                 totalDuration: chunk.totalDuration,
@@ -574,15 +575,13 @@ async function summarizeVideo5(req, res) {
                 clippedVideoUrl: chunkClippedVideoUrl,
                 finalVideoUrl: chunkFinalVideoUrl,
                 processingStatus: 'success'
-              });
-              
-              console.log(`Chunk ${i + 1}: Processing completed successfully`);
+              };
               
             } catch (chunkError) {
-              console.error(`Chunk ${i + 1}: Processing failed:`, chunkError);
+              console.error(`Chunk ${i}: Processing failed:`, chunkError);
               
-              // Store failed chunk result
-              processedChunks.push({
+              // Return failed chunk result
+              return {
                 chunkId: chunk.chunkId,
                 summary: chunk.summary,
                 totalDuration: chunk.totalDuration,
@@ -595,11 +594,13 @@ async function summarizeVideo5(req, res) {
                 finalVideoUrl: url, // Fallback to original video
                 processingStatus: 'failed',
                 error: chunkError.message
-              });
+              };
             }
-          }
+          });
           
-          console.log(`Completed processing all ${processedChunks.length} chunks`);
+          // Wait for all parallel processing to complete
+          processedChunks = await Promise.all(chunkProcessingPromises);
+          console.log(`Completed processing all ${processedChunks.length} chunks in parallel`);
         } else {
           console.warn('No meaningful chunks to process');
         }
@@ -912,7 +913,7 @@ async function summarizeVideo5(req, res) {
          
           
            subtitleChunks=createSubtitleChunks(mergedGroups);
-           const subtitleResult = await processVideoWithChunkedSubtitles(clippedVideoUrl,subtitleChunks);
+           const subtitleResult = await processVideoWithChunkedSubtitles(clippedVideoUrl,subtitleChunks, 'main_chunk');
            
            if (!subtitleResult.success) {
             throw new Error(`Failed to process video with subtitles: ${subtitleResult.error}`);

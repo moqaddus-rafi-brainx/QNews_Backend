@@ -16,9 +16,10 @@ const { uploadVideoBufferAndGetSignedUrl } = require('./googleStorageService');
 /**
  * Downloads a video from URL and saves it temporarily
  * @param {string} videoUrl - URL of the video to download
+ * @param {string} customFilename - Optional custom filename for the temporary file
  * @returns {Promise<string>} Path to the temporary video file
  */
-async function downloadVideoFromUrl(videoUrl) {
+async function downloadVideoFromUrl(videoUrl, customFilename = null) {
   try {
     const response = await axios({
       method: 'GET',
@@ -27,7 +28,8 @@ async function downloadVideoFromUrl(videoUrl) {
       timeout: 30000 // 30 seconds timeout
     });
 
-    const tempVideoPath = path.join('/tmp', `temp_video_${Date.now()}.mp4`);
+    const filename = customFilename || `temp_video_${Date.now()}.mp4`;
+    const tempVideoPath = path.join('/tmp', filename);
     await fs.writeFile(tempVideoPath, response.data);
     
     return tempVideoPath;
@@ -87,40 +89,49 @@ async function generateSRTFromChunks(subtitleChunks) {
     .join('\n');
 }
 
-async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFilename = 'temp_subtitles.srt', targetLanguage = 'en', translateToEnglish = true, sourceLanguage = 'auto') {
+async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, chunkId = null, srtFilename = null, targetLanguage = 'en', translateToEnglish = true, sourceLanguage = 'auto') {
   let tempVideoPath = null;
   let srtFilePath = null;
   let outputVideoPath = null;
   const tempFiles = [];
 
+  // Generate unique file names based on chunkId and timestamp
+  const timestamp = Date.now();
+  const uniqueId = chunkId ? `${chunkId}_${timestamp}` : timestamp;
+  
+  // Use provided srtFilename or generate unique one
+  const uniqueSrtFilename = srtFilename || `temp_subtitles_${uniqueId}.srt`;
+  const uniqueVideoFilename = `temp_video_${uniqueId}.mp4`;
+  const uniqueOutputFilename = `video_with_subs_${uniqueId}.mp4`;
+
   try {
     
     // Step 1: Download video from URL
-    console.log('Downloading video from URL...');
-    tempVideoPath = await downloadVideoFromUrl(videoUrl);
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Downloading video from URL...`);
+    tempVideoPath = await downloadVideoFromUrl(videoUrl, uniqueVideoFilename);
     tempFiles.push(tempVideoPath);
-    console.log('Video downloaded successfully');
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Video downloaded successfully`);
 
 
     // Step 2: Generate SRT subtitles
-    console.log('Generating SRT subtitles...');
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Generating SRT subtitles...`);
     const srtContent = await generateSRTFromChunks(subtitleChunks);
-    srtFilePath = await saveSRTToFile(srtContent, srtFilename);
+    srtFilePath = await saveSRTToFile(srtContent, uniqueSrtFilename);
     tempFiles.push(srtFilePath);
-    console.log('SRT subtitles generated successfully');
+    console.log(`[Chunk ${chunkId || 'unknown'}]: SRT subtitles generated successfully`);
 
     // Step 3: Apply subtitles to video using FFmpeg
-    console.log('Applying subtitles to video...');
-    outputVideoPath = await applySubtitlesToVideo(tempVideoPath, srtFilePath);
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Applying subtitles to video...`);
+    outputVideoPath = await applySubtitlesToVideo(tempVideoPath, srtFilePath, uniqueOutputFilename);
     tempFiles.push(outputVideoPath);
-    console.log('Subtitles applied successfully');
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Subtitles applied successfully`);
 
     // Step 4: Upload video to Google Cloud Storage
-    console.log('Uploading video to Google Cloud Storage...');
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Uploading video to Google Cloud Storage...`);
     const videoBuffer = await fs.readFile(outputVideoPath);
     const uploadResult = await uploadVideoBufferAndGetSignedUrl(
       videoBuffer,
-      `video_with_subs_${Date.now()}.mp4`,
+      `video_with_subs_chunk_${uniqueId}.mp4`,
       'video/mp4',
       60 // 60 minutes expiration
     );
@@ -129,11 +140,11 @@ async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFil
       throw new Error(`Failed to upload video: ${uploadResult.error}`);
     }
     
-    console.log('Video uploaded to Google Cloud Storage successfully');
-    console.log('Signed URL:', uploadResult.signedUrl);
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Video uploaded to Google Cloud Storage successfully`);
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Signed URL:`, uploadResult.signedUrl);
 
     // Step 5: Clean up temporary files
-    console.log('Cleaning up temporary files...');
+    console.log(`[Chunk ${chunkId || 'unknown'}]: Cleaning up temporary files...`);
     await cleanupTempFiles(tempFiles);
 
     return {
@@ -141,6 +152,7 @@ async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFil
       cloudinaryUrl: uploadResult.signedUrl, // Keep the same property name for compatibility
       gsUri: uploadResult.gsUri,
       filePath: uploadResult.filePath,
+      chunkId: chunkId,
       processingDetails: {
         originalVideoUrl: videoUrl,
         targetLanguage,
@@ -158,17 +170,18 @@ async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFil
     };
 
   } catch (error) {
-    console.error('Error in video processing with subtitles:', error);
+    console.error(`[Chunk ${chunkId || 'unknown'}]: Error in video processing with subtitles:`, error);
     
     // Clean up any temporary files that were created
     if (tempFiles.length > 0) {
-      console.log('Cleaning up temporary files due to error...');
+      console.log(`[Chunk ${chunkId || 'unknown'}]: Cleaning up temporary files due to error...`);
       await cleanupTempFiles(tempFiles);
     }
 
     return {
       success: false,
       error: error.message,
+      chunkId: chunkId,
       processingDetails: {
         originalVideoUrl: videoUrl,
         targetLanguage,
@@ -186,11 +199,13 @@ async function processVideoWithChunkedSubtitles(videoUrl, subtitleChunks, srtFil
  * Applies SRT subtitles to a video using FFmpeg
  * @param {string} inputVideoPath - Path to input video file
  * @param {string} srtFilePath - Path to SRT subtitle file
+ * @param {string} customOutputFilename - Optional custom output filename
  * @returns {Promise<string>} Path to the output video with subtitles
  */
-function applySubtitlesToVideo(inputVideoPath, srtFilePath) {
+function applySubtitlesToVideo(inputVideoPath, srtFilePath, customOutputFilename = null) {
   return new Promise((resolve, reject) => {
-    const outputVideoPath = path.join('/tmp', `video_with_subs_${Date.now()}.mp4`);
+    const filename = customOutputFilename || `video_with_subs_${Date.now()}.mp4`;
+    const outputVideoPath = path.join('/tmp', filename);
     
     console.log('FFmpeg input path:', inputVideoPath);
     console.log('SRT file path:', srtFilePath);
