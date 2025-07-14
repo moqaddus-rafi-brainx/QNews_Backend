@@ -965,42 +965,58 @@ async function applyPunctuationToTranscripts(transcripts, language = 'auto') {
     return [];
   }
 
-  console.log(`Applying punctuation to ${transcripts.length} transcript segments...`);
+  console.log(`Applying punctuation to ${transcripts.length} transcript segments in parallel batches...`);
 
   const punctuatedTranscripts = [];
+  const batchSize = 4; // Process 4 transcripts per batch
 
-  for (let i = 0; i < transcripts.length; i++) {
-    const transcript = transcripts[i];
+  // Process transcripts in batches
+  for (let i = 0; i < transcripts.length; i += batchSize) {
+    const batch = transcripts.slice(i, i + batchSize);
+    const batchIndex = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(transcripts.length / batchSize);
     
-    if (!transcript.transcript || typeof transcript.transcript !== 'string') {
-      console.warn(`Skipping transcript at index ${i}: missing or invalid transcript text`);
-      punctuatedTranscripts.push(transcript);
-      continue;
-    }
+    console.log(`Processing batch ${batchIndex}/${totalBatches} with ${batch.length} transcripts...`);
+    
+    // Process current batch in parallel
+    const batchPromises = batch.map(async (transcript, batchOffset) => {
+      const globalIndex = i + batchOffset;
+      
+      if (!transcript.transcript || typeof transcript.transcript !== 'string') {
+        console.warn(`Skipping transcript at index ${globalIndex}: missing or invalid transcript text`);
+        return transcript;
+      }
 
-    try {
-      console.log(`Processing transcript ${i + 1}/${transcripts.length}...`);
-      
-      // Add punctuation to the transcript text
-      const punctuatedText = await addPunctuationToText(transcript.transcript, language);
-      
-      // Create new transcript object with punctuated text
-      const punctuatedTranscript = {
-        ...transcript,
-        transcript: punctuatedText,
-        originalTranscript: transcript.transcript // Keep original for reference
-      };
-      
-      punctuatedTranscripts.push(punctuatedTranscript);
-      
-    } catch (error) {
-      console.error(`Failed to add punctuation to transcript ${i + 1}:`, error);
-      // Keep original transcript if punctuation fails
-      punctuatedTranscripts.push(transcript);
-    }
+      try {
+        console.log(`Processing transcript ${globalIndex + 1}/${transcripts.length} in batch ${batchIndex}...`);
+        
+        // Add punctuation to the transcript text
+        const punctuatedText = await addPunctuationToText(transcript.transcript, language);
+        
+        // Create new transcript object with punctuated text
+        const punctuatedTranscript = {
+          ...transcript,
+          transcript: punctuatedText,
+          originalTranscript: transcript.transcript // Keep original for reference
+        };
+        
+        return punctuatedTranscript;
+        
+      } catch (error) {
+        console.error(`Failed to add punctuation to transcript ${globalIndex + 1}:`, error);
+        // Keep original transcript if punctuation fails
+        return transcript;
+      }
+    });
+    
+    // Wait for current batch to complete
+    const batchResults = await Promise.all(batchPromises);
+    punctuatedTranscripts.push(...batchResults);
+    
+    console.log(`Completed batch ${batchIndex}/${totalBatches}`);
   }
 
-  console.log(`Successfully processed ${punctuatedTranscripts.length} transcript segments`);
+  console.log(`Successfully processed ${punctuatedTranscripts.length} transcript segments in parallel batches`);
   return punctuatedTranscripts;
 }
 

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { summarizeVideo, upload, summarizeVideo2,summarizeVideo3,summarizeVideo4,summarizeVideo5,testingUsingPunctuationAndDiffModel } = require('../controllers/videoAnalysisController');
+const { summarizeVideo, upload, summarizeVideo2,summarizeVideo5 } = require('../controllers/videoAnalysisController');
 const { getSignedUrl } = require('../controllers/signedUrlController');
 
 /**
@@ -9,7 +9,7 @@ const { getSignedUrl } = require('../controllers/signedUrlController');
  * @access Public
  */
 router.post('/analyze-video', summarizeVideo2);
-router.post('/analyze-video2',upload.single('video'), summarizeVideo5);
+router.post('/analyze-video2', summarizeVideo5);
 
 /**
  * @route POST /api/v2/get-signed-url
