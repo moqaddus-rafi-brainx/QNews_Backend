@@ -392,17 +392,7 @@ function mergeCloseTranscripts(transcripts) {
     
     if (timeGap <= 3) {
 
-      // if (timeGap > 0) {
-      //   // Since transcripts array contains references to the original objects,
-      //   // modifying lastInGroup directly modifies the original transcript
-      //   lastInGroup.endTime = parseFloat(lastInGroup.endTime) + timeGap;
-        
-      //   // Extend the last word's endTime if words array exists
-      //   if (lastInGroup.words && Array.isArray(lastInGroup.words) && lastInGroup.words.length > 0) {
-      //     const lastWord = lastInGroup.words[lastInGroup.words.length - 1];
-      //     lastWord.endTime = parseFloat(lastWord.endTime) + timeGap;
-      //   }
-      // }
+      
 
       // Merge into current group
       currentGroup.push(current);
@@ -768,7 +758,7 @@ async function divideTranscriptsIntoSentencesWithAI(relevantTranscripts, speechT
       const speechEndTime = speechWords[speechWords.length - 1].endTime;
       
       // Check for overlap
-      return (speechStartTime <= relevantEndTime && speechEndTime >= relevantStartTime);
+      return (speechStartTime == relevantStartTime && speechEndTime == relevantEndTime);
     });
     
     if (!matchingSpeechTranscript) {
@@ -1735,7 +1725,7 @@ async function createMeaningfulChunks(importantSentences, videoDescription, main
 
   try {
     const prompt = `Group these sentences into logical, coherent chunks that are 20-30 seconds long (give or take 5 seconds) and that can be used independently as a news segment.
-
+IMPORTANT: Each chunks MUST be AT MOST 30 seconds long. 
 Video Context:
 - Main Topic: "${mainTopic}"
 - Category: "${category}"
@@ -1745,7 +1735,7 @@ Important Sentences to group:
 ${sentencesData.map(s => `ID ${s.id}: "${s.transcript}" (${s.startTime}s - ${s.endTime}s, duration: ${s.duration.toFixed(1)}s)`).join('\n')}
 
 Requirements:
-1. Create chunks that are 20-30 seconds long (15-35 seconds is acceptable)
+1. Create chunks that are 20-30 seconds long.
 2. Sentences within each chunk should be logically connected and meaningful together
 3. Respect the chronological order of sentences
 4. Each chunk should tell a complete thought or story segment
@@ -1808,15 +1798,20 @@ IMPORTANT:
           return null;
         }
 
-        // Calculate actual timing from the sentences
-        const actualStartTime = Math.min(...chunkSentences.map(s => parseFloat(s.startTime)));
-        const actualEndTime = Math.max(...chunkSentences.map(s => parseFloat(s.endTime)));
-        
         // Calculate total duration by summing individual sentence durations
-        const actualDuration = chunkSentences.reduce((total, sentence) => {
+        let actualDuration = chunkSentences.reduce((total, sentence) => {
           const sentenceDuration = parseFloat(sentence.endTime) - parseFloat(sentence.startTime);
           return total + sentenceDuration;
         }, 0);
+
+        // If actualDuration > 30, remove sentences from the end until duration <= 30
+        while (actualDuration > 30 && chunkSentences.length > 1) {
+          const lastSentence = chunkSentences.pop();
+          actualDuration -= (parseFloat(lastSentence.endTime) - parseFloat(lastSentence.startTime));
+        }
+
+        const actualStartTime = Math.min(...chunkSentences.map(s => parseFloat(s.startTime)));
+        const actualEndTime = Math.max(...chunkSentences.map(s => parseFloat(s.endTime)));
 
         return {
           chunkId: chunk.chunkId,
@@ -1937,7 +1932,7 @@ function createHighlightChunksByDuration(highlights) {
   const chunks = [];
   let currentChunk = [];
   let currentDuration = 0;
-  const minDuration = 15; // Minimum 15 seconds
+  const minDuration = 10; // Minimum 15 seconds
   const targetDuration = 20; // Target 20 seconds
   const maxDuration = 30; // Maximum 30 seconds
 

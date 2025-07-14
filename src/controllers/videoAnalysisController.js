@@ -369,307 +369,7 @@ async function summarizeVideo2(req, res) {
   }
 }
 
-async function summarizeVideo3(req, res) {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No video file uploaded' });
-    }
-      const fileBuffer = req.file.buffer;
-      const description = req.body.summary || null;
-      const videoId="68662910a02e0fafe6b1bd4c"
-      const result = await getVideoTranscript2(videoId,description);
-      const {summary,details} = await getVideoDetails(videoId,description);
-    console.log(summary);
-    console.log(details);
-    
-    // Parse details if it's a string, or provide fallback values
-    let parsedDetails = {
-      mainTopic: "Unknown topic",
-      language: "Unknown",
-      category: "other"
-    };
-    
-    if (details) {
-      try {
-        // If details is a string, try to parse it as JSON
-        if (typeof details === 'string') {
-          parsedDetails = JSON.parse(details);
-        } else if (typeof details === 'object') {
-          parsedDetails = details;
-        }
-      } catch (parseError) {
-        console.error('Failed to parse details:', parseError);
-        // Keep default values
-      }
-    }
-     
-      const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer, parsedDetails.language);
 
-      res.json({
-        speechTranscripts,
-        result
-      });
-    
-
-  } catch (error) {
-    console.error('Error in video analysis endpoint:', error);
-    res.status(500).json({ error: 'Failed to analyze video', trace: error?.message });
-  }
-}
-
-async function summarizeVideo4(req, res) {
-  try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'No video file uploaded' });
-      }
-
-    const description = req.body.summary || null;
-    const fileBuffer = req.file.buffer;
-    const url = await uploadVideoToCloudinary(fileBuffer);
-    //const url = `https://res.cloudinary.com/ds0opfsmi/video/upload/v1750942950/my_videos/kgi6pa0lajkyecqiapq3.mp4`
-    console.log(url);
-  // const url=`https://res.cloudinary.com/ds0opfsmi/video/upload/v1750745841/my_videos/kniuzaombtb1ullbptrh.mp4`;
-
-    // Step 1: Analyze audio first
-    //const audioAnalysis = await extractAudioAndAnalyze(fileBuffer);
-    
-
-    // Step 2: Process video annotation using the Google service
-    //const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer, audioAnalysis.detectedLanguage);
-    const videoId = await uploadVideoToTwelveLabs(url);
-    console.log(videoId);
-    const result = await getVideoTranscript(videoId,description);
-    const transcripts=result.transcripts;
-    const {summary,details} = await getVideoDetails(videoId,description);
-    console.log(summary);
-    console.log(details);
-    
-    // Parse details if it's a string, or provide fallback values
-    let parsedDetails = {
-      mainTopic: "Unknown topic",
-      language: "Unknown",
-      category: "other"
-    };
-    
-    if (details) {
-      try {
-        // If details is a string, try to parse it as JSON
-        if (typeof details === 'string') {
-          parsedDetails = JSON.parse(details);
-        } else if (typeof details === 'object') {
-          parsedDetails = details;
-        }
-      } catch (parseError) {
-        console.error('Failed to parse details:', parseError);
-        // Keep default values
-      }
-    }
-     const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer, parsedDetails.language);
-    // const importantChunks = await getImportantTrancriptChunks("6860f305da8b16ab27af7b7a",description);
-    // console.log(importantChunks);
-
-    let videoDetails=null;
-    let selectedHighlights=null;
-    let clippedVideoUrl=null;
-    let videoWithAudioUrl=null;
-    let mergedGroups=null;
-    let segmentsToKeep = [];
-    //We have transcript
-      if(result.is_speaker){
-       
-
-         const selectedTranscripts=await selectTranscriptsByImportance(transcripts);
-         console.log(selectedTranscripts);
-         mergedGroups = mergeCloseTranscripts(selectedTranscripts.selectedTranscripts);
-         
-         // Convert mergedGroups to segmentsToKeep array
-
-         for (const group of mergedGroups) {
-           if (group && group.length > 0) {
-             // Get the start time from the first transcript in the group
-             const startTime = group[0].startTime;
-             // Get the end time from the last transcript in the group
-             const endTime = group[group.length - 1].endTime;
-             
-             segmentsToKeep.push({
-               startTime: startTime,
-               endTime: endTime
-             });
-           }
-         }
-         console.log('segmentsToKeep:', segmentsToKeep);
-         
-         // Validate segments before trimming
-         if (segmentsToKeep.length === 0) {
-           console.warn('No segments to keep, skipping video trimming');
-           clippedVideoUrl = url; // Use original video
-         } else {
-           // Validate segment timing
-           const totalDuration = Math.max(...segmentsToKeep.map(s => s.endTime));
-           console.log('Total duration from segments:', totalDuration);
-           console.log('Selected transcripts total duration:', selectedTranscripts.totalDuration);
-           
-           try {
-             const renderId = await removeClipFromVideo(url, segmentsToKeep, selectedTranscripts.totalDuration);
-             clippedVideoUrl = renderId.url;
-             console.log('Video trimming successful:', clippedVideoUrl);
-           } catch (trimError) {
-             console.error('Video trimming failed, using original video:', trimError.message);
-             clippedVideoUrl = url; // Fallback to original video
-           }
-         }
-         
-         const subtitleResult = await processVideoWithSubtitles(clippedVideoUrl,mergedGroups);
-         
-         if (!subtitleResult.success) {
-          throw new Error(`Failed to process video with subtitles: ${subtitleResult.error}`);
-        }
-        
-        const { cloudinaryUrl } = subtitleResult;
-        videoWithAudioUrl=cloudinaryUrl;
-      
-
-      }
-      else{
-
-        videoDetails = await getVideoHighlights(videoId,description);
-        console.log(videoDetails.highlights);
-        const result = selectMostImportantHighlights(videoDetails.highlights);
-        console.log(result);
-        selectedHighlights = result.selectedHighlights;
-       
-        for(const highlight of selectedHighlights){
-          segmentsToKeep.push({
-            startTime: highlight.start,
-            endTime: highlight.end
-          });
-        }
-        console.log(segmentsToKeep);
-        
-        // Validate segments before trimming
-        if (segmentsToKeep.length === 0) {
-          console.warn('No segments to keep, skipping video trimming');
-          clippedVideoUrl = url; // Use original video
-        } else {
-          // Validate segment timing
-          const totalDuration = Math.max(...segmentsToKeep.map(s => s.endTime));
-          console.log('Total duration from segments:', totalDuration);
-          console.log('Selected highlights total duration:', result.totalDuration);
-          
-          try {
-            const renderId = await removeClipFromVideo(url, segmentsToKeep, result.totalDuration);
-            clippedVideoUrl = renderId.url;
-            console.log('Video trimming successful:', clippedVideoUrl);
-          } catch (trimError) {
-            console.error('Video trimming failed, using original video:', trimError.message);
-            clippedVideoUrl = url; // Fallback to original video
-          }
-        }
-        
-        let voiceOver=null;
-        if(transcripts.length>0){
-          const transcriptTexts = [];
-      
-      // Iterate through each item in the array
-      transcripts.forEach(item => {
-            if (item.transcript) {
-              transcriptTexts.push(item.transcript);
-            }
-        })
-      
-      const contentDescription = transcriptTexts.join('\n');
-
-
-          voiceOver = await generateVoiceOverForVideo(true, description,contentDescription,segmentsToKeep, result.totalDuration,videoId);
-          
-        }
-        else{
-          const highlightText = [];
-      
-      // Iterate through each item in the array
-        selectedHighlights.forEach(item => {
-              highlightText.push(item.highlightSummary);
-        })
-        const contentDescription = highlightText.join('\n');
-          voiceOver = await generateVoiceOverForVideo(false, description,contentDescription,segmentsToKeep, result.totalDuration,videoId);
-        }
-          const {audioUrl,duration} = await convertTextToSpeech(voiceOver);
-          const videoWithAudioId = await overlayAudioOnVideo(clippedVideoUrl, audioUrl,duration, result.totalDuration);
-          videoWithAudioUrl = videoWithAudioId.url;
-
-      }
-    
-
-
-   
-   //const importantChunks = await getImportantTrancriptChunks("685e3ea9da8b16ab27aeb33b");
-    res.json({
-      language:parsedDetails.language,
-      mainTopic:parsedDetails.mainTopic,
-      category:parsedDetails.category,
-      summary,
-      originalVideoUrl: url,
-      videoWithAudioUrl,
-      segmentsToKeep,
-      mergedGroups,
-      selectedHighlights
-    });
-
-  } catch (error) {
-    console.error('Error in video analysis endpoint:', error);
-    res.status(500).json({ error: 'Failed to analyze video', trace: error?.message });
-  }
-}
-
-async function testingUsingPunctuationAndDiffModel(req,res){
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No video file uploaded' });
-    }
-    const fileBuffer = req.file.buffer;
-    const language=req.body.language;
-    const description=req.body.description;
-    const mainTopic=req.body.mainTopic || null;
-    const category=req.body.category || null;
-    let segmentsToKeep=[];
-
-    // Step 2: Process video annotation using the Google service
-    const { speechTranscripts, labels, shots, operationResult } = await processVideoAnnotation(fileBuffer,language);
-    const transcriptTimestamps = speechTranscripts && speechTranscripts.length > 0 ? getTranscriptTimestamps(speechTranscripts) : [];
-    const punctuatedTranscripts=await applyPunctuationToTranscripts(transcriptTimestamps);
-    const sentences=await divideTranscriptsIntoSentencesWithAI(punctuatedTranscripts,speechTranscripts);
-    const sentencesWithImportance=await analyzeSentenceImportance(sentences,description,mainTopic,category);
-    const selectedTranscripts=await selectTranscriptsByImportance(sentencesWithImportance);
-    console.log(selectedTranscripts);
-    const mergedGroups = mergeCloseTranscripts(selectedTranscripts.selectedTranscripts);
-    console.log(selectedTranscripts.totalDuration);
-         
-         // Convert mergedGroups to segmentsToKeep array
-         for (const group of mergedGroups) {
-           if (group && group.length > 0) {
-             // Get the start time from the first transcript in the group
-             const startTime = group[0].startTime;
-             // Get the end time from the last transcript in the group
-             const endTime = group[group.length - 1].endTime;
-             
-             segmentsToKeep.push({
-               startTime: startTime,
-               endTime: endTime
-             });
-           }
-         }
-         console.log('segmentsToKeep:', segmentsToKeep);
-
-    const subtitleChunks=createSubtitleChunks(selectedTranscripts.selectedTranscripts);
-    const srtContent=await generateSRTFromChunks(subtitleChunks);
-
-
-    res.json({sentences,selectedTranscripts,subtitleChunks,mergedGroups,segmentsToKeep,srtContent});
-    
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to analyze video', trace: error?.message });
-  }
-}
 
 
 async function summarizeVideo5(req, res) {
@@ -693,13 +393,20 @@ async function summarizeVideo5(req, res) {
     console.log('Generated signed URL for video access:', url);
     console.log('Description:', description);
     
-    //const videoId="6870e7608bf3dbda64615c38";
-    const videoId = await uploadVideoToTwelveLabs(url);
+   //const videoId="6873f06b49df73a703b23659";
+    const [videoDuration,videoId] = await Promise.all([
+     
+      getVideoDuration(url),
+      uploadVideoToTwelveLabs(url)
+    ]);
     console.log(videoId);
-    const result = await getVideoTranscript(videoId, description);
+    const [result, otherDetails] = await Promise.all([
+      getVideoTranscript(videoId, description),
+      getVideoDetails(videoId, description)
+    ]);
     const transcripts = result.transcripts;
     const language = result.language;
-    const {summary, details} = await getVideoDetails(videoId, description);
+    const {summary, details} = otherDetails;
     console.log(summary);
     console.log(details);
     
@@ -737,7 +444,6 @@ async function summarizeVideo5(req, res) {
     let importantSentences=[];
     let meaningfulChunks=null;
     let processedChunks = [];
-    const videoDuration=await getVideoDuration(url);
     console.log(videoDuration);
     if(videoDuration>180){
       if(result.is_speaker){
@@ -778,6 +484,12 @@ async function summarizeVideo5(req, res) {
 
         meaningfulChunks=await createMeaningfulChunks(importantSentences,description,parsedDetails.mainTopic,parsedDetails.category);
         
+        meaningfulChunks.forEach(chunk => {
+          if (chunk.sentences && chunk.sentences.length > 0) {
+            chunk.sentences.sort((a, b) => parseFloat(a.startTime) - parseFloat(b.startTime));
+            console.log(`Chunk ${chunk.chunkId}: Sorted ${chunk.sentences.length} sentences by start time`);
+          }
+        });
         //PROCESSING EACH CHUNK INTO AN INDEPENDENT CLIP.
         
         if (meaningfulChunks && meaningfulChunks.length > 0) {
@@ -1277,8 +989,6 @@ async function summarizeVideo5(req, res) {
 
       }
     
-
-
    
    //const importantChunks = await getImportantTrancriptChunks("685e3ea9da8b16ab27aeb33b");
     res.json({
@@ -1306,8 +1016,5 @@ module.exports = {
   summarizeVideo,
   upload,
   summarizeVideo2,
-  summarizeVideo3,
-  summarizeVideo4,
-  testingUsingPunctuationAndDiffModel,
   summarizeVideo5
 };
