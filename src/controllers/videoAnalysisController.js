@@ -493,7 +493,7 @@ async function summarizeVideo5(req, res) {
         if (meaningfulChunks && meaningfulChunks.length > 0) {
           console.log(`Processing ${meaningfulChunks.length} meaningful chunks...`);
           
-          // Step 1: Process all chunks in parallel up to subtitle chunk creation
+          // Process all chunks in parallel (including subtitle processing)
           const chunkProcessingPromises = meaningfulChunks.map(async (chunk, index) => {
             const i = index + 1;
             console.log(`Processing chunk ${i}/${meaningfulChunks.length}: ${chunk.summary}`);
@@ -538,7 +538,26 @@ async function summarizeVideo5(req, res) {
               const chunkSubtitleChunks = createSubtitleChunks(mergedChunkTranscripts);
               console.log(`Chunk ${i}: Created ${chunkSubtitleChunks.length} subtitle chunks`);
               
-              // Return the processed chunk data (without applying subtitles yet)
+              // Step 5: Apply subtitles (now in parallel)
+              let chunkFinalVideoUrl = chunkClippedVideoUrl; // Default to clipped video
+              if (chunkSubtitleChunks.length > 0) {
+                try {
+                  const subtitleResult = await processVideoWithChunkedSubtitles(chunkClippedVideoUrl, chunkSubtitleChunks, chunk.chunkId);
+                  
+                  if (subtitleResult.success) {
+                    chunkFinalVideoUrl = subtitleResult.cloudinaryUrl;
+                    console.log(`Chunk ${i}: Subtitles applied successfully`);
+                  } else {
+                    console.error(`Chunk ${i}: Failed to apply subtitles:`, subtitleResult.error);
+                  }
+                } catch (subtitleError) {
+                  console.error(`Chunk ${i}: Error applying subtitles:`, subtitleError.message);
+                }
+              } else {
+                console.warn(`Chunk ${i}: No subtitle chunks to apply`);
+              }
+              
+              // Return the processed chunk result
               return {
                 chunkId: chunk.chunkId,
                 summary: chunk.summary,
@@ -552,8 +571,8 @@ async function summarizeVideo5(req, res) {
                 subtitleChunksCount: chunkSubtitleChunks.length,
                 originalVideoUrl: url,
                 clippedVideoUrl: chunkClippedVideoUrl,
-                chunkSubtitleChunks: chunkSubtitleChunks,
-                processingStatus: 'trimmed'
+                finalVideoUrl: chunkFinalVideoUrl,
+                processingStatus: 'success'
               };
               
             } catch (chunkError) {
@@ -578,57 +597,8 @@ async function summarizeVideo5(req, res) {
           });
           
           // Wait for all parallel processing to complete
-          const trimmedChunks = await Promise.all(chunkProcessingPromises);
-          console.log(`Completed parallel processing for all ${trimmedChunks.length} chunks`);
-          
-          // Step 2: Apply subtitles sequentially to avoid download conflicts
-          console.log('Starting sequential subtitle application...');
-          for (let i = 0; i < trimmedChunks.length; i++) {
-            const chunk = trimmedChunks[i];
-            
-            if (chunk.processingStatus === 'failed') {
-              console.log(`Skipping subtitle application for chunk ${i + 1} due to previous failure`);
-              processedChunks.push(chunk);
-              continue;
-            }
-            
-            try {
-              console.log(`Applying subtitles to chunk ${i + 1}/${trimmedChunks.length}: ${chunk.summary}`);
-              
-              let chunkFinalVideoUrl = chunk.clippedVideoUrl; // Default to clipped video
-              if (chunk.chunkSubtitleChunks && chunk.chunkSubtitleChunks.length > 0) {
-                try {
-                  const subtitleResult = await processVideoWithChunkedSubtitles(chunk.clippedVideoUrl, chunk.chunkSubtitleChunks, chunk.chunkId);
-                  
-                  if (subtitleResult.success) {
-                    chunkFinalVideoUrl = subtitleResult.cloudinaryUrl;
-                    console.log(`Chunk ${i + 1}: Subtitles applied successfully`);
-                  } else {
-                    console.error(`Chunk ${i + 1}: Failed to apply subtitles:`, subtitleResult.error);
-                  }
-                } catch (subtitleError) {
-                  console.error(`Chunk ${i + 1}: Error applying subtitles:`, subtitleError.message);
-                }
-              } else {
-                console.warn(`Chunk ${i + 1}: No subtitle chunks to apply`);
-              }
-              
-              // Update the chunk with final video URL
-              chunk.finalVideoUrl = chunkFinalVideoUrl;
-              chunk.processingStatus = 'success';
-              
-              processedChunks.push(chunk);
-              
-            } catch (subtitleError) {
-              console.error(`Chunk ${i + 1}: Subtitle application failed:`, subtitleError);
-              chunk.processingStatus = 'subtitle_failed';
-              chunk.error = subtitleError.message;
-              chunk.finalVideoUrl = chunk.clippedVideoUrl; // Fallback to clipped video
-              processedChunks.push(chunk);
-            }
-          }
-          
-          console.log(`Completed sequential subtitle application for all ${processedChunks.length} chunks`);
+          processedChunks = await Promise.all(chunkProcessingPromises);
+          console.log(`Completed processing all ${processedChunks.length} chunks in parallel`);
         } else {
           console.warn('No meaningful chunks to process');
         }
